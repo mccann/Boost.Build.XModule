@@ -1,0 +1,122 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+##################################################################
+##
+##   xlib export target generator
+##
+##################################################################
+
+class xlib-export-generator : lib-generator xfile-export-generator
+{
+    # because we override builtin.lib-generator,
+    # we need to pass back to it, in cases where this is
+    # not an xmodule library, specifically for no-sources
+    #
+    rule match-rank ( property-set )
+    {
+        local result ;
+
+        # never match <file>
+        if ! [ $(property-set).contains-features <file> ] {
+            result = true ;
+        }
+
+        return $(result) ;
+    }
+
+    # switch lib-type based on <link>property
+    rule explicit-type ( property-set )
+    {
+        local type = LIB ;
+        switch [ $(property-set).get <link> ] {
+            case shared : type = SHARED_LIB ;
+            case static : type = STATIC_LIB ;
+        }
+        return mutable $(type) ;
+    }
+
+    rule run ( project name ? : property-set : sources * )
+    {
+        local xsource ;
+        local pass-through ;
+        local viable-xsource ;
+
+        local viable-sources =  [ generators.viable-source-types
+                                    $(self.actual-source) ] ;
+
+        assert.equal : $(self.source-types) ;
+        for local s in $(sources) {
+
+            # consider viable for ANY
+            if [ $(s).type ] in $(viable-sources) {
+                viable-xsource += $(s) ;
+            }
+
+            # viable xlib source..
+            if ! [ deny-type [ $(s).type ] $(name) : no-log ] {
+
+                local try = [ generators.construct-types $(project) $(name)
+                            : $(self.actual-source) : $(property-set) : $(s) ] ;
+
+                if $(try) && ! $(try[3])
+                    && [ $(try[2]).type ] = $(self.actual-source)
+                {
+                    xsource += $(try[2]) ;
+                }
+            }
+            else {
+                pass-through += $(s) ;
+            }
+        }
+
+        if $(xsource[2]) {
+            generator-error "multiple xmodule sources found for lib"
+                            : $(project) : $(xsource) : $(name) ;
+        }
+
+        # construct result from xsource
+        if $(xsource) {
+            # construct the lib
+            result = [ xfile-export-generator.generated-targets $(xsource)
+                          : $(property-set) : $(project) $(name) ] ;
+
+            # add xdll-paths (important for LIB targets)
+            # just like 'linking-generator.extra-usage-requirements'
+            if $(result) && shared = [ $(property-set).get <link> ] 
+            {
+                local paths ;
+                local pwd = [ path.pwd ] ;
+                for local t in $(result[2-]) {
+                    if [ type.is-derived [ $(t).type ] SHARED_LIB ] {
+                        local tp = [ $(t).path ] ;
+                        local tn = [ $(t).name ] ;
+                        paths += [ path.root
+                                    [ path.make
+                                        [ path.join $(tp) $(tn:D) ] ]
+                                    $(pwd) ] ;
+                    }
+                }
+
+                result = [ $(result[1]).add-raw $(paths:G=<xdll-path>) ]
+                         $(result[2-]) ;
+            }
+
+            # regardless of lib type, return a valid result, with passthrough
+            # .. but only pass-through when xlib was successful
+            if $(result) {
+                return $(result) $(pass-through) ;
+            }
+        }
+        # let builtin.lib-generator do it, only if it didn't look viable
+        # only do this for the one 'xpath+-lib' generator
+        else if ! $(viable-xsource) && $(self.id) = xmodule.xpath+-lib {
+            generators.dout [ indent ]  "  $(self.id) calling lib-generator" ;
+            return  [ lib-generator.run $(project) $(name)
+                                      : $(property-set)
+                                      : $(sources) ] ;
+        }
+    }
+}
+

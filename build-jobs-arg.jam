@@ -1,0 +1,253 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+import trim ;
+import os ;
+
+######################################################
+##
+##  jobs-arg-from-options
+#
+#   - find '-j' option value for a list of options
+#   - return empty if not found
+
+rule jobs-arg-from-options ( options * )
+{
+    local last-option ;
+    local j-arg ;
+
+    # parse out '-j' option .. support "-jN" and "-j N"
+    for opt in $(options) {
+        if ! $(j-arg) {
+            local m = [ MATCH ^([0-9]+).*$ : $(opt) ] ;
+            if $(m) {
+                if $(last-option) = "-j" {
+                    j-arg = $(m) ;
+                }
+            }
+            else {
+                m = [ MATCH ^-j([0-9]+).*$ : $(opt) ] ;
+                if $(m) {
+                    j-arg = $(m) ;
+                }
+                else {
+                    last-option = $(opt) ;
+                }
+            }
+        }
+    }
+
+    return $(j-arg) ;
+}
+
+######################################################
+##
+##  current-boost-build-jobs-arg
+#
+#   - determin '-j' value for current invocation
+#   - return default if not set
+
+rule current-boost-build-jobs-arg ( default ? )
+{
+    if ! $(self.j-arg) {
+        self.j-arg = [ jobs-arg-from-options [ modules.peek : ARGV ] ] ;
+        self.j-arg ?= "" ;
+    }
+    if $(self.j-arg) = "" {
+        return $(default) ;
+    }
+    return $(self.j-arg) ;
+}
+
+######################################################
+##
+##  compute-external-build-jobs-arg
+#
+#   - determin '-j' value for external builds from arguments
+
+rule compute-external-build-jobs-arg ( boost-j ? : limit ? )
+{
+    local result = $(boost-j) ;
+
+    if $(boost-j) && $(boost-j) != 1 {
+        if $(limit) && [ CALC $(limit) - $(boost-j) ] < 0 {
+            result = $(limit) ;
+        }
+
+        if $(result) > "1" {
+            result = [ CALC $(result) - 1 ] ;
+        }
+    }
+
+    return $(result) ;
+}
+
+
+######################################################
+##
+##  host-num-cores
+#
+#   - returns 1 if it can't find out
+
+.lastnumber-regex  = ([0-9]+)[^0-9]*$ ;
+
+rule host-num-cores ( )
+{
+    if ! $(.host-num-cores) {
+        import trim ;
+
+        if [ os.name ] in NT {
+            # untested
+            .host-num-cores = [ trim.sh "echo %NUMBER_OF_PROCESSORS%" ] ;
+        }
+        else {
+            # works on linux/osx
+            .host-num-cores = [ trim.sh "getconf _NPROCESSORS_ONLN" ] ;
+
+            # works on BSD variants
+            if ! $(.host-num-cores) {
+                # only tested on osx, using 'aggressive' regex
+                # incase output is different on other systems
+                .host-num-cores = [ MATCH $(.lastnumber-regex)
+                                    : [ trim.sh "sysctl hw.ncpu" ] ] ;
+            }
+
+            # works on solaris (untested)
+            if ! $(.host-num-cores) {
+                # untested
+                .host-num-cores = [ MATCH $(.lastnumber-regex)
+                                    : [ trim.sh "psrinfo -p" ] ] ;
+            }
+        }
+
+        # still don't know? default to 1
+        if ! [ MATCH ^([0-9]+)$ : $(.host-num-cores) ] {
+            .host-num-cores = 1 ;
+        }
+    }
+
+    return $(.host-num-cores) ;
+}
+
+
+.assume-distributed-build = ;
+
+rule distributed-build-default ( distributed-build ? )
+{
+    .assume-distributed-build = $(distributed-build) ;
+}
+
+######################################################
+##
+##  external-build-jobs-arg
+#
+#   - determin '-j' value for external builds
+#   - set distributed-build argument to non-empty
+#     to avoid limiting to local-system's cores
+
+rule external-build-jobs-arg ( distributed-build ? )
+{
+    local signature = "local" ;
+    if $(distributed-build) || $(.assume-distributed-build) {
+        signature = distributed ;
+    }
+
+    signature = .external-jobs-arg.$(signature) ;
+
+    if ! $($(signature)) {
+        local limit ;
+        local boost-j = [ current-boost-build-jobs-arg 1 ] ;
+
+        if ! $(distributed-build) {
+            limit = [ host-num-cores ] ;
+        }
+
+        $(signature) = [ compute-external-build-jobs-arg $(boost-j)
+                         : $(limit) ] ;
+    }
+    return $($(signature)) ;
+}
+
+
+rule __test__ ( )
+{
+    import assert ;
+
+    assert.result    : jobs-arg-from-options       ;
+    assert.result 1  : jobs-arg-from-options -j1   ;
+    assert.result 1  : jobs-arg-from-options -j 1  ;
+    assert.result 10 : jobs-arg-from-options -j10  ;
+    assert.result 10 : jobs-arg-from-options -j 10 ;
+    assert.result 8  : jobs-arg-from-options -j8   ;
+    assert.result 8  : jobs-arg-from-options -j 8  ;
+    assert.result 64 : jobs-arg-from-options -j64  ;
+    assert.result 64 : jobs-arg-from-options -j 64 ;
+
+    assert.result    : jobs-arg-from-options variant=release
+                                             static target-name ;
+    assert.result 5  : jobs-arg-from-options variant=release
+                                             static -j5 target-name ;
+    assert.result 5  : jobs-arg-from-options variant=release
+                                             static -j 5 target-name ;
+
+    # take first instance
+    assert.result 2 : jobs-arg-from-options -j2 -j5 ;
+    assert.result 2 : jobs-arg-from-options -j 2 -j5 ;
+    assert.result 2 : jobs-arg-from-options -j 2 -j 5 ;
+
+    # simulate 'atoi'
+    assert.result 3 : jobs-arg-from-options -j3d   ;
+    assert.result 3 : jobs-arg-from-options -j 3d  ;
+    assert.result 3 : jobs-arg-from-options -j 3 7 ;
+
+
+    # ensure they at least can run
+    echo 'local' external-built-jobs-arg: [ external-build-jobs-arg ] ;
+    echo 'local' external-built-jobs-arg: [ external-build-jobs-arg dist ] ;
+
+    # check limiting logic
+    assert.result   : compute-external-build-jobs-arg       ;
+    assert.result   : compute-external-build-jobs-arg   : 1 ;
+    assert.result   : compute-external-build-jobs-arg   : 2 ;
+    assert.result 1 : compute-external-build-jobs-arg 1     ;
+    assert.result 1 : compute-external-build-jobs-arg 1 : 0 ;
+    assert.result 1 : compute-external-build-jobs-arg 1 : 1 ;
+    assert.result 1 : compute-external-build-jobs-arg 2     ;
+    assert.result 1 : compute-external-build-jobs-arg 2 : 2 ;
+    assert.result 2 : compute-external-build-jobs-arg 3     ;
+    assert.result 2 : compute-external-build-jobs-arg 3 : 3 ;
+    assert.result 1 : compute-external-build-jobs-arg 3 : 2 ;
+    assert.result 3 : compute-external-build-jobs-arg 4     ;
+    assert.result 1 : compute-external-build-jobs-arg 4 : 2 ;
+    assert.result 2 : compute-external-build-jobs-arg 4 : 3 ;
+    assert.result 3 : compute-external-build-jobs-arg 4 : 4 ;
+    assert.result 3 : compute-external-build-jobs-arg 4 : 5 ;
+
+    assert.result 63 : compute-external-build-jobs-arg  64      ;
+    assert.result 7  : compute-external-build-jobs-arg  64 : 8  ;
+    assert.result 63 : compute-external-build-jobs-arg  64 : 88 ;
+
+
+    assert.result 15 : compute-external-build-jobs-arg  20 : 16 ;
+    assert.result 9  : compute-external-build-jobs-arg  10 : 16 ;
+
+
+    # regex test
+    assert.result 1 : MATCH ^([0-9]+)$ : 1 ;
+    assert.result 88 : MATCH ^([0-9]+)$ : 88 ;
+    assert.result 1234567890 : MATCH ^([0-9]+)$ : 1234567890 ;
+    assert.result 0000000001 : MATCH ^([0-9]+)$ : 0000000001 ;
+
+    local re = [ modules.peek build-jobs-arg : .lastnumber-regex ] ;
+    assert.result 88 : MATCH $(re) : "hw.ncpu: 88" ;
+    assert.result 88 : MATCH $(re) : "hw.ncpu: 88\n " ;
+    assert.result 88 : MATCH $(re) : "88\n " ;
+    assert.result 88 : MATCH $(re) : " \"88\"\n " ;
+    assert.result 88 : MATCH $(re) : " :88 " ;
+    assert.result 1  : MATCH $(re) : "1" ;
+    assert.result 88 : MATCH $(re) : " :88 " ;
+    assert.result 88 : MATCH $(re) : " host5.25 has 88 cores" ;
+
+}

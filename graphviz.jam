@@ -1,0 +1,416 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+import type ;
+import generators ;
+import "class" : new ;
+import sequence ;
+import feature ;
+
+type.register GRAPHVIZ_DOT          : dot ;
+type.register GRAPHVIZ_TARGET       : : GRAPHVIZ_DOT ;
+type.register GRAPHVIZ_GENERATOR    : : GRAPHVIZ_DOT ;
+
+feature.feature graphviz-type       : : free ;
+feature.feature graphviz-generator  : : free ;
+
+class graphviz-generator : generator
+{
+    import property-set ;
+    import graphviz ;
+    import regex ;
+    import type ;
+
+    rule output ( str * )
+    {
+        self.output-strs += $(str:J=" ") ;
+    }
+    rule get-output ( )
+    {
+        return $(self.output-strs:J=\n)\n ;
+    }
+    rule reset ( )
+    {
+        self.output-strs = ;
+        self.nodes = ;
+        self.edges = ;
+        self.root-nodes = ;
+        self.root-edges = ;
+    }
+
+    rule node-safe ( str )
+    {
+        return [ regex.replace $(str:E="") "[^a-zA-Z_0-9 ]+" "_" ] ;
+    }
+
+    rule label-safe ( str )
+    {
+        return [ regex.replace $(str:E="") "[^a-zA-Z_. 0-9]+" "." ] ;
+    }
+
+    rule node-name ( target )
+    {
+        return  [ node-safe $(target) ] ;
+    }
+
+    rule cluster-start ( target )
+    {
+        local name = [ node-safe [ $(target).name ] ] ;
+        output "  subgraph cluster_$(name) {" ;
+    }
+
+    rule cluster-end ( )
+    {
+        output "  }" ;
+    }
+
+    rule show-node ( target )
+    {
+        local type = [ modules.peek $(target) : self.type ] ;
+        if ! $(type) || ! $(type) in C CPP OBJ {
+            return true ;
+        }
+    }
+
+    rule node ( target )
+    {
+        if [ show-node $(target) ] {
+            output "   " [ node-name $(target) ]
+                         [ sequence.join "[ label=\"" [ $(target).name ] "\" ]" ] ;
+        }
+    }
+
+    rule edge ( node1 node2 )
+    {
+        if [ show-node $(node1) ] && [ show-node $(node2) ] {
+            output " " [ node-name $(node1) ] "\n       ->" [ node-name $(node2) ]  ;
+        }
+    }
+
+    rule collect ( target root ? )
+    {
+        if [ $(target).root ] {
+            self.root-nodes += $(target) ;
+            root = $(target) ;
+        }
+
+        local targets ;
+
+        local action = [ $(target).action ] ;
+        if $(action) {
+            targets = [ $(action).targets ] ;
+            for local s in [ $(action).sources ] {
+                self.edges += $(targets)|$(s) ;
+                collect $(s) $(root) ;
+            }
+        }
+        else {
+            targets = $(target) ;
+        }
+
+        if $(root) {
+            for local t in  $(targets) {
+                self.root-edges += $(root) $(t) ;
+            }
+        }
+        else {
+            self.nodes += $(targets) ;
+        }
+
+    }
+
+    rule output-root ( root : edges * )
+    {
+        cluster-start  $(root) ;
+
+        local filtered ;
+
+        local nodes ;
+
+        while $(edges) {
+            if $(edges[1]) = $(root) {
+                nodes += $(edges[2]) ;
+            }
+            else {
+                filtered += $(edges[1]) $(edges[2]) ;
+            }
+            edges = $(edges[3-]) ;
+        }
+
+        sequence.transform node : [ sequence.unique $(nodes) ] ;
+
+        cluster-end ;
+
+        return $(filtered) ;
+    }
+
+    rule output-root-clusters ( root-edges * )
+    {
+        while $(root-edges) {
+            root-edges = [ output-root  $(root-edges[1]) :
+                                        $(root-edges) ] ;
+        }
+    }
+
+    rule output-unrooted-nodes ( )
+    {
+        sequence.transform node : $(self.nodes) ;
+    }
+
+    rule output-edges ( edges * )
+    {
+        for local pair in [ sequence.unique $(edges) ] {
+            edge [ MATCH ^(.*)\\|(.*)$ : $(pair) ] ;
+        }
+    }
+
+
+    ## 
+
+    rule output-type-group ( name : types * : cluster-attr * : first-type-attr * : make-edges ? )
+    {
+        name = [ node-safe $(name) ] ;
+        if $(types[2]) {
+            output "  subgraph cluster_$(name) {" ;
+            output "    rank=same clusterrank=none " $(cluster-attr) ;
+        }
+        else {
+            output "  subgraph $(name) { " ;
+        }
+
+        # nodes
+        for local t in $(types) {
+            output "   " [ node-safe $(t) ] "[ $(first-type-attr) ]" ;
+            first-type-attr = ;
+        }
+
+        if $(make-edges) {
+            while $(types[2]) {
+                output "   " [ node-safe $(types[1]) ] -> [ node-safe $(types[2]) ] ;
+                types = $(types[2-]) ;
+            }
+        }
+
+        output "  }" ;
+    }
+
+    rule output-base-type-group ( name : base base-attr * : cluster-attr * )
+    {
+        local bases = [ type.all-bases $(base) ] ;
+        if $(bases[1]) != $(base) {
+            exit BASE not as expected $(base) .. $(bases) ;
+        }
+
+        output-type-group $(name) : $(bases) : $(cluster-attr) : $(base-attr) : make-bases ;
+    }
+
+    rule output-viable-source-tree ( generator-ids * : target-types * )
+    {
+        local edges = ;
+        local all-sources = ;
+
+        local t0 ;
+        local t  ;
+
+        local rule process-generator ( g )
+        {
+            local sources = [ $(g).source-types ] ;
+            
+            sources ?= "ANY" ;
+
+            for local s in $(sources) {
+                local derived = $(s) ;
+                if $(s) != "ANY" {
+                    derived = [ type.all-derived $(s) ] ;
+                }
+                for local n in  $(derived) {
+                    if ! $(n) in $(all-sources) {
+                        all-sources += $(n) ;
+
+                        if ! $(n) in $(t0) {
+                            t += $(n) ;
+                        }
+                    }
+                    edges += $(s) $(n) $(current-target) [ $(g).id ] ;
+                }
+            }
+        }
+
+        if $(target-types) {
+            for local t in $(target-types) {
+                t0 += [ type.all-bases $(t) ] ;
+            }
+            t  = $(t0) ;
+        }
+
+
+        if $(generator-ids) {
+            local all-generators = [ modules.peek generators : .all-generators ] ;
+            for local g in $(all-generators) {
+                if [ $(g).id ] in $(generator-ids) {
+                    process-generator $(g) ;
+                } 
+            }
+        }
+  
+        while $(t)
+        {
+            local current-target = $(t[1]) ;
+            local generators = [ modules.peek generators : .generators.$(t[1]) ] ;
+            t = $(t[2-]) ;
+
+            while $(generators)
+            {
+                process-generator $(generators[1]) ; 
+                generators = $(generators[2-]) ;
+            }
+        }
+
+        # TODO: put this in the output graph as a title or something
+        # echo all-sources: $(all-sources) ;
+
+        local rule root-base ( type )
+        {
+            local result ;
+            while $(type) {
+                result = $(type) ;
+                type   = [ type.base $(type) ] ;
+            }
+            return $(result) ;
+        }
+
+        local rule equal-root ( root type )
+        {
+            if $(root) = [ root-base $(type) ] {
+                return true ;
+            }
+        }
+
+        for local base-type in $(target-types) {
+            output-base-type-group 
+                  $(base-type) 
+                : $(base-type) 
+                : "color=lightblue style=filled edge [ color=blue dir=both ] "  ;
+        }
+
+        local source-roots = [ sequence.unique [ sequence.transform root-base : $(all-sources) ] ] ;
+
+        local rule base-cluster ( root )
+        {
+            local sources = [ sequence.unique [ sequence.filter equal-root $(root) : $(all-sources) ] ] ;
+            output-type-group $(root) : $(sources)  : " edge [ color=green ] color=grey "  ;
+        }
+
+        sequence.transform base-cluster : $(source-roots) ;
+
+        local edges-out ;
+        while $(edges) {
+
+            # remove 'module' name from actions
+            # make edge4 not matter
+    #         edges = $(edges[1-3]) "" $(edges[5-]) ;
+            local action = [ MATCH ^.*\\.(.*)$ : $(edges[4]:E=.unknown) ] ;
+            if $(action) {
+                action = [ label-safe $(action) ] ;
+            }
+            local key = "$(edges[1])/$(edges[2])/$(edges[3])/$(edges[4]:E=)" ;
+            if ! $(key) in $(edges-out) {
+                if $(edges[1]) = $(edges[2]) {
+                    output "    " [ node-safe $(edges[1]) ] -> 
+                                  [ node-safe $(edges[3]) ] "[ color=red  ]"  "[ label=\"$(action)\" ]" ;
+                }
+                else {
+                    output "    " [ node-safe $(edges[2]) ] -> 
+                                  [ node-safe $(edges[3]) ] "[ color=blue ]"  "[ label=\"$(action)\" ]" ;
+                }
+                edges-out += $(key) ;
+            }
+            edges = $(edges[5-]) ;
+        }
+
+    }
+
+    rule output-sources-graph ( sources * )
+    {
+        # collect
+        sequence.transform collect : $(sources) ;
+
+        output "digraph $(name) {" ;
+        output-root-clusters  $(self.root-edges) ;
+        output-unrooted-nodes $(self.nodes) ;
+        output-edges          $(self.edges) ;
+        output "}" ;
+    }
+
+    rule run ( project name ? : property-set : sources * )
+    {
+        # reset incase run multiple times
+        reset ;
+
+        if $(self.id) = graphviz.target && $(sources) {
+            name ?= [ $(sources[1]).name ] ;
+            output-sources-graph $(sources) ;
+        }
+
+        if $(self.id) = graphviz.generator {
+
+            local types = [ $(property-set).get <graphviz-type> ] ;
+            local generators = [ $(property-set).get <graphviz-generator> ] ;
+
+            local graph-name ;
+            graph-name = [ sequence.transform node-safe $(generators) $(types) ] ;
+            graph-name = $(graph-name:J=__) ;
+            graph-name ?= $(name) ;
+            graph-name ?= "what" ;
+
+            output "digraph $(name) {"  ;
+
+            output-viable-source-tree $(generators) : $(types) ;
+
+            output "}" ;
+        }
+
+
+        local output = [ get-output ] ;
+        if $(output) {
+
+            return  [ property-set.empty ] 
+                    [ virtual-target.register
+                        [ new file-target 
+                              $(name)
+                            : $(self.target-types[1]) 
+                            : $(project)
+                            : [ new non-scanning-action 
+                                    [ new notfile-target 
+                                            $(output)
+                                        : $(project) ]
+                                : graphviz.generate
+                                : $(property-set) ] 
+                    ]   ] ;
+        }
+    }
+}
+
+import path ;
+rule generate ( target : source * : properties * )
+{
+    # write file now
+    local output-file = [ path.root $(target:G=) [ on $(target) return $(LOCATE) ] ] ;
+    local outfile = @($(output-file):E=$(source:G=)) ;
+}
+
+if [ modules.peek : OS ] = MACOSX 
+{
+    actions generate 
+    {
+        open -a Graphviz $(<[1])    
+    }
+}
+
+
+generators.register [ new graphviz-generator graphviz.target    : : GRAPHVIZ_TARGET    ] ;
+generators.register [ new graphviz-generator graphviz.generator : : GRAPHVIZ_GENERATOR ] ;
+
+

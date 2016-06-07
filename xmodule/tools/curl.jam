@@ -1,0 +1,193 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+import type ;
+import feature ;
+import generators ;
+import "class" : new ;
+import toolset ;
+import xmodule ;
+
+
+feature.feature xcurl-arg         : : free ; # arguments for curl ..
+feature.feature xcurl-retry       : : free incidental ; 
+feature.feature xcurl-file-type   : : free ; # type of output file
+feature.feature xcurl-output-name : : free incidental ; # name of output file
+
+type.register XCURL_URL           : : XURL  ;
+
+##################################################################
+##
+##   xcurl-file generator
+##
+##################################################################
+
+# example:
+#     
+#      xfile target : http://foo.com/path/file.txt ;
+#
+# 
+# properties:
+#
+# <xcurl-arg>           * passed to 'curl' plainly.
+#                         - if not passsed "-L" is used, to follow redirects
+#
+# <xcurl-retry>         * number of retries default = 3
+#
+# <xcurl-output-name>   * set output filename (type can be deduced from this)
+#
+# <xcurl-file-type>     * like <xfile-type>, cast result type
+#
+
+
+class xcurl-xfile-generator : xmodule-url-generator
+{
+    import xmodule : construct-workspace parse-url munge-url ;
+    import assert ;
+    import path ;
+
+    # workspace location by default is based on URL, yet url's are often too big
+    #
+    # use '<hostbasename>.<filebasename>-XXXXX/' as name
+    #     XXXX = url hash
+
+    
+    rule workspace-name ( url )
+    {
+        local name = [ munge-url $(url) ] curl ;
+        return $(name:J=.) ;
+    }
+
+    rule file-name ( url : property-set : target-name )
+    {
+        # try for <xcurl-output-name> property
+        local name = [ $(property-set).get <xcurl-output-name> ] ;
+        assert.equal : $(name[2]) ; # should be only one <xcurl-output-name>
+       
+        if ! $(name) {
+            local parts = [ parse-url $(url) ] ;
+
+            name = $(parts[3]:BS) ;
+            if $(name) = "" {
+                name  = [ MATCH ^(.*)__xurl-.*$ : $(target-name) ] ;
+                name ?= curl.out ;
+            }
+        }
+       
+        return $(name) ; 
+    }
+
+    rule generated-targets ( source : property-set : project name ? )
+    {
+
+        local url = [ $(source).name ] ;
+        local file-name = [ file-name $(url) : $(property-set) : $(name) ] ;
+
+        # construct workspace
+        local workspace = [ construct-workspace $(project) 
+                                [ workspace-name $(url) ]
+                              : 
+                                # by default, workspace is mostly invariant
+                                [ xvariant-ps $(property-set) : : .* ] 
+                              : $(source) 
+                          ] ;
+
+
+
+        # get/construct root location
+        local workpath  = [ $(workspace).path ] ;
+        
+        # do not use xfile-type for type hinting
+        # use <xcurl-file-type> instead
+        local file-type = [ xmodule.xfile-type $(property-set)
+                             : xcurl-file-type ] ;
+        if ! $(file-type) {
+            file-type = [ type.type $(file-name) ] ;
+        }
+        file-type ?= XFILE ; # type of last resort 
+        
+        # download (one-time)
+        local curl-log ;
+        local curl-out ;
+        {
+            local curl = [ new non-scanning-action 
+                                  $(source) 
+                                  $(workspace)
+                                : $(self.id)
+                                : [ $(workspace).refine 
+                                    # only care about xcurl-
+                                    [ xvariant-ps $(property-set) 
+                                        : xcurl-.* 
+                                        : .* 
+                                    ] 
+                                  ] 
+                          ] ;
+
+            curl-log  = [ virtual-target.register
+                            [ new xmodule-workspace-file-target 
+                                  $(file-name).curl-log
+                                : : $(workspace) 
+                                : $(project)
+                                : $(curl) 
+                                : $(workpath) ] ] ;
+
+            curl-out  = [ virtual-target.register
+                            [ new xmodule-workspace-file-target
+                                  $(file-name)
+                                : $(file-type)
+                                : $(workspace) 
+                                : $(project)
+                                : $(curl)
+                                : $(workpath) 
+                                : permit-type-change ] ] ;
+
+        }
+      
+        return  [ property-set.empty ] 
+                $(curl-out) ;
+    }
+
+}
+
+xmodule.register-url-handler curl XCURL_URL XFILE : : : default ;
+
+generators.register [ new xcurl-xfile-generator 
+                              xmodule-curl.curl 
+                            : XCURL_URL : XFILE ] ;
+
+
+
+toolset.flags   $(__name__).curl OPTIONS : <xcurl-arg> ;
+toolset.flags   $(__name__).curl RETRY   : <xcurl-retry> ;
+
+XLOG = [ xmodule.logfile-action ] ;
+
+actions curl
+{
+    $(XLOG[1])="$(<[1])"
+    {   
+        for i in `seq 1 $(RETRY:E=3)` ; do
+            echo "curl $(>[1]:G=) #$i"
+            { 
+                curl --progress-bar $(OPTIONS:E=-L) --fail "$(>[1]:G=)" > "$(<[2]).tmp" 
+            
+            } && {
+                : move temporary into output 
+                mv "$(<[2]).tmp" "$(<[2])" 
+            
+            } && {
+                echo "Success!"
+                break
+            
+            } || {
+                rm "$(<[2]).tmp"
+                echo "Failed!"
+                false
+            }
+        done
+    
+    } $(XLOG[2])
+
+}

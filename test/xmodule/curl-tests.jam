@@ -1,0 +1,34 @@
+
+# test curl as source
+xfile curl-1 : file://$(ROOT)/README.md ;
+
+# test curl as property
+xfile curl-2 : : <xurl>file://$(ROOT)/README.md ;
+
+# test that file-type is passed through
+xfile curl-3 : file://$(ROOT)/test/xmodule/src/hello-world.c ;
+run   curl-3 : : : : run-curl-3 ;
+
+# test <xfile-type> cast functionality by trying to compile from it
+xfile curl-4 : file://$(ROOT)/test/xmodule/src/hello-world.h 
+             : <xfile-type>.c ;
+run   curl-4 : : : : run-curl-4 ;
+
+# test output to 'curl-5'
+xfile curl-5 : http://google.com  ;
+
+# test output to 'index.html'
+xfile curl-6 : http://google.com  : <xcurl-output-name>index.html ;
+
+
+
+# test curl as source
+alias curl-13 : file://$(ROOT)/README.md ;
+
+# test that file-type is passed through
+alias curl-14 : file://$(ROOT)/test/xmodule/src/hello-world.c ;
+run   curl-14 : : : : run-curl-14 ;
+
+# test output to 'curl-15'
+alias curl-15 : http://google.com ;
+

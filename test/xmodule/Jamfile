@@ -1,0 +1,57 @@
+
+import testing ;
+import cast ;
+
+location = [ MATCH ^.*<(.*)>$ : $(__name__) ] ;
+
+include $(location)/regular-lib.jam ;
+include $(location)/build-tests.jam ;
+include $(location)/download-tests.jam ;
+include $(location)/project-tests.jam ;
+
+include $(location)/xrsrc-piecewise-tests.jam ;
+include $(location)/xrsrc-project-tests.jam ;
+
+include $(location)/mixed-lib.jam ;
+
+include $(location)/curl-tests.jam ;
+
+include $(location)/tar-tests.jam ;
+
+
+# wish list
+
+#
+# xlib foo : https://host.tld/path/repo.git
+#          : <xfile>/configure                  # Ambiguous, not clear if XFILE comes from XREPO or XBUILD or XDIST ?  <xrepo-file> is unambiguous. As would be <xmodule>xrepo:<xfile> or something.
+#            <xdist-path>lib                    #
+#            <xdist-include>/include
+#          ;
+
+# alternate
+#
+
+# xfile xf : file://$(ROOT)/.git : <name>test/xmodule/configure-pkg/configure ;
+
+
+
+
+# visualize target's sources
+for local target in run44 {
+    graphviz-target $(target)_dot : $(target) ;
+    explicit $(target)_dot ;
+}
+
+# visualize types
+for local type in XDIST LIB XLIB XFILE XPATH XMAKE_SRC_BUILD XMAKE_BUILD XBUILD {
+    graphviz-generator $(type:L)_dot  : : <graphviz-type>$(type) ;
+    explicit $(type:L)_dot ;
+}
+
+# visualize generator
+import regex ;
+for local generator in xmodule.xdist-xpath {
+    local name = [ regex.replace $(generator) "[.-]" _ ] ;
+    graphviz-generator $(name)_dot  : : <graphviz-generator>$(generator) ;
+    explicit $(name)_dot ;
+}

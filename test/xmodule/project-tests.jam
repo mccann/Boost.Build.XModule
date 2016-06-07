@@ -1,0 +1,96 @@
+
+
+
+xdist    bbxm : configure-pkg/configure ;
+
+xinclude bbxm-inc1  : bbxm : <name>include ;
+
+# xpath   bbxmlib : bbxm : <xpath>lib ;
+
+lib     bbxm-foo1   : bbxm : <name>lib/!foo <link>static  ;
+obj     bbxm-obj1   : src/test.c  bbxm-inc1 ;
+
+run     src/test.c bbxm-foo1 bbxm-inc1 : : : : runproj1 ;
+
+lib      bbxm-foo2  : bbxm//lib//     : <name>!foo <link>static  ;
+xinclude bbxm-inc2  : bbxm            : <name>include ;
+obj      bbxm-obj2  : src/test.c  bbxm-inc2 ;
+
+
+run     src/test.c
+        bbxm-foo2
+        bbxm-inc2 : : : : runproj2 ;
+
+
+run     src/test.c
+        bbxm//lib@lib/!foo/<link>static
+        bbxm//xinclude@include
+        : : : : runproj3 ;
+
+# test xlib@ works
+run     src/test.c
+        bbxm//xlib@lib/!foo/<link>static
+        bbxm//xinclude@include
+        : : : : runproj3b ;
+
+run     src/test.c
+        [ xlib     : bbxm//lib/!foo : <link>static ]
+        [ xinclude : bbxm//include ]
+        : : : : runproj4 ;
+
+
+# resource ending in // is xpath
+run     src/test.c
+        [ xlib !foo             : bbxm//lib//   : <link>static ]
+        [ xinclude "include"    : bbxm                         ]
+        : : : : runproj5 ;
+
+
+# resource ending in /. is xpath
+run     src/test.c
+        [ xlib !foo             : bbxm//lib/.   : <link>static ]
+        [ xinclude "include"    : bbxm                         ]
+        : : : : runproj6 ;
+
+
+
+
+
+# xfile   bbxmfoo : bbxm : <name>src/foo.c ;
+# obj     obj1 : bbxmX//src/foo.c : <define>LIB_NAME=\\\"asdf\\\" ;
+
+
+# If the find was unable to load the project we synthesize it.
+# local bbxm = [ project.load bbxm : synthesize ] ;
+
+# xpath  bbxinc   : bbxm : <xpath>include ;
+# xpath  fooxpath : bbxm : <xpath>src ;
+#
+# xfile  foofilec : fooxpath : <name>foo.c ;
+# xinclude fooinc : bbxinc   : <xinclude>. ;
+#
+#
+#
+# run     src/extern-test.c foofilec fooinc    : : : <define>LIB_NAME=\\\"asdf\\\" : runproj1 ;
+
+# run     src/extern-test.c bbxmX//src/foo.c
+#         : :
+#         : <define>LIB_NAME=\\\"asdf\\\"
+#         : runproj2 ;
+
+
+# xrepo bbxm   : ;
+# xdist pkg46  : bbxm//test/xmodule/configure-pkg/configure ;
+#
+# # same
+# xpath narf   : pkg46 : <xpath>lib ;
+# alias narf2  : pkg46//lib ;
+#
+# lib   foo46  : xdist//lib : <name>foo ;
+#
+# xfile foo    : pkg46//path/to/file.h ; # file from file ? --
+# xfile foo    : pkg46 : <xpath>path/to <name>file.h ;
+
+# ultimate??
+# lib   foo    : https://github.com/name/project.git//configure//lib/!foo.xlib ;
+

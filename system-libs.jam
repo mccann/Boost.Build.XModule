@@ -1,0 +1,1247 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+####     system-libs
+#
+#     rule system-libs    ( names +
+#                         : properties *
+#                         : usage-requirements *
+#                         )
+#
+#   scans the search paths for the given library(s)
+#
+#   names +
+#       -- name of lib to find, 'glob' pattern type - can use "?" and "*"
+#
+#   properties *
+#       -- optionally the following properties
+#          can have <os>OS: conditional prefix
+#
+#           <path>PATH
+#               - PATH to search
+#
+#           <cc-search-dirs>
+#               - search library paths from: 'cc -print-search-dirs'
+#
+#           <exclude>GLOB-PATTERN
+#               - GLOB-PATTERN of names to exclude - can use "?" and "*"
+#
+#           <PROPERTY>VALUE
+#               - created lib will have <PROPERTY>VALUE
+#                 as part of it's requirements
+#                 conflicting libs will not be created
+#
+#           <target-prefix>PREFIX
+#               - PREFIX for the created main target
+#
+#           <threading-tag>TAG
+#               - postfix TAG of lib-names that indicate
+#                 threading differentiation.
+#                 Specifically the 'multi' threaded type
+#                 boost-example: '-mt'
+#
+#           <debug>
+#               - will print out debug info for each lib made
+#
+#           <homebrew>FORMULA
+#               - FORMULA to find library in
+#                 if formula's cellar has /include
+#                 it will be added to usage-requirements
+#                 will prompt operator to brew install the formula if
+#                 it isn't installed
+#
+#           <homebrew-version>VERSION
+#               - require homebrew formula of a specific version
+#                 applies to previous <homebrew> property
+#
+#           <homebrew-with>ARGSTR
+#               - require homebrew forumla to have --with-ARGSTR arg
+#                 applies to previous <homebrew> property
+#
+#           <apt>PACKAGE
+#               - apt PACKAGE to find library in
+#                 if apt package has non-standard /include path
+#                 it will be added to usage-requirements
+#
+#           <headers-only>TARGET
+#               - create a headers only alias target named TARGET 
+#
+#   usage-requirements *
+#       -- created libs will have these usage requirements
+#
+# returns: library names created
+#
+#
+#   Future-Ideas:
+#
+#           could work with 'xxxx-config' type executables
+#            - parsing -l -L, etc
+#
+
+#  TODO: caching -- SLOW currently
+
+
+
+
+import sequence ;
+import set ;
+import path : glob ;
+import trim ;
+import string : join ;
+import feature ;
+import regex ;
+import project ;
+import "class" : new ;
+import generators ;
+import type ;
+import virtual-target ;
+
+
+# default to 'no' -- ie, import libs into appforge
+#feature.feature system-lib  : no yes : optional ;
+
+local rule cc-search-paths ( )
+{
+    if ! $(.system-search-paths) {
+        .system-search-paths =  [ SPLIT_BY_CHARACTERS
+                                    [ MATCH "libraries: =(.*)" :
+                                        [ trim.sh "cc -print-search-dirs" ] ]
+                                : ":" ] ;
+    }
+
+    return $(.system-search-paths) ;
+}
+
+.OS = [ modules.peek : OS ] ;
+
+shared-lib-exts = so dylib ;
+static-lib-exts = a ;
+
+lib-exts = $(static-lib-exts) $(shared-lib-exts) ;
+
+local rule regex-glob-pattern ( glob-pattern )
+{
+    local re =
+            [ regex.replace
+              [ regex.replace
+                $(glob-pattern)
+                \\? [^.]
+              ]
+              \\* [^.]*
+            ] ;
+
+    return $(re) ;
+}
+
+local rule glob-lib-pattern  ( threading-tag ? : glob-pattern * )
+{
+    threading-tag += "" ;
+    local version  = "" .* ;
+    return lib$(glob-pattern)$(threading-tag)$(version).$(lib-exts)* ;
+}
+
+local rule regex-lib-pattern ( threading-tag ? : glob-pattern * )
+{
+    if $(threading-tag) {
+        threading-tag = [ regex-glob-pattern $(threading-tag) ] ;
+        threading-tag += "" ;
+    }
+    threading-tag ?= "" ;
+
+    local regex-pattern = [ sequence.transform regex-glob-pattern
+                            : $(glob-pattern) ] ;
+    local name-pattern = $(regex-pattern)$(threading-tag) ;
+
+    local relib = (.*/|)(lib($(name-pattern:J=|))(\\..*|)\\.($(lib-exts:J=|))(\\..*|)) ;
+
+    return $(relib) ;
+}
+
+
+local rule regex-match-files ( threading-tag ? : glob-pattern * : files * )
+{
+    local matched ;
+    local re = [ regex-lib-pattern $(threading-tag) : $(glob-pattern) ] ;
+    for local file in $(files) {
+        if [ MATCH $(re) : $(file) ] {
+            matched += $(file) ;
+        }
+    }
+
+    return $(matched) ;
+}
+
+rule tokenize-gristlibs ( threading-tag ? : gristlibs * )
+{
+    local result ;
+
+    local re = [ regex-lib-pattern $(threading-tag) : * ] ;
+
+    for local gl in $(gristlibs) {
+
+        local   lib             inc
+                file-name       name
+                basename        tag
+                headver         tailver
+                unique-name     version
+                ext             link-type
+                threading-type
+            ;
+
+        lib = $(gl:G=) ;
+        inc = [ MATCH ^<(.*)>$ : $(gl:G) ] ;
+
+        local m = [ MATCH $(re) : $(lib) ] ;
+
+#         (.*/|)            # 1 basedir
+#         (lib              # 2 filename
+#         (name-tag|name))  # 3 name
+#         (\..*|)\.         # 4 headver
+#         (a|so|dylib)      # 5 ext
+#         (\..*|))          # 6 tailver
+
+        file-name = $(m[2]) ;
+        name      = $(m[3]) ;
+        basename  = [ MATCH ^(.*)$(threading-tag:E=)$ : $(name) ] ;
+        basename ?= $(name) ;
+        tag       = [ MATCH ^.*($(threading-tag:E=))$ : $(name) ] ;
+        headver   = $(m[4]) ;
+        ext       = $(m[5]) ;
+        tailver   = $(m[6]) ;
+
+#         echo m: '$(lib)' -- '$(m)' ;
+#         echo file-name: '$(file-name)' name: '$(name)' basename: '$(basename)' tag: '$(tag)' headver: '$(headver)' tailver: '$(tailver)' ext: $(ext) ;
+
+        # in weird case that both ver exist, use tail
+        if $(tailver) != "" {
+            version = $(tailver) ;
+        }
+        else {
+            version = $(headver) ;
+        }
+
+        unique-name = $(name)|$(ext) ;
+
+        if $(ext) in $(shared-lib-exts) {
+            link-type = shared ;
+        }
+        else if $(ext) in $(static-lib-exts) {
+            link-type = static ;
+        }
+
+        if $(threading-tag)
+        {
+            if $(tag) = $(threading-tag) {
+                threading-tag-type = tagged ;
+            }
+            else {
+                threading-tag-type = untagged ;
+            }
+        }
+        else {
+            threading-tag-type = undefined ;
+        }
+
+
+        if $(unique-name)
+           && $(link-type)
+           && $(threading-tag-type)
+        {
+            result +=   $(unique-name)  # 1 - used by best-match
+                        $(version:E="") # 2 - used by best-match
+                        $(basename)     # 3 - used by find-lib
+                        $(link-type)    # 4 - used by find-lib
+                $(threading-tag-type)   # 5 - used by find-lib
+                        $(lib)          # 6 - used by declare-lib
+                        $(inc:E="")     # 7 - used by declare-lib
+                    ;
+        }
+    }
+
+    return $(result) ;
+}
+
+
+rule version-order ( a b )
+{
+    for local l in a b {
+        local postfix = [ MATCH ^\\.(.*)$ : $($(l)) ] ;
+        if $(postfix) {
+            $(l) = [ regex.split $(postfix) \\. ] ;
+        }
+    }
+
+    local result ;
+
+    for local i in 1 2 3 4 5 6 {
+        if ! $(result) {
+            if ! $(a[$(i)]) && $(b[$(i)]) {
+                result = ">" ;
+            }
+            else if $(a[$(i)]) && ! $(b[$(i)]) {
+                result = "<" ;
+            }
+            else if $(a[$(i)]) && $(b[$(i)]) {
+                if $(a[$(i)]) < $(b[$(i)]) {
+                    result = "<" ;
+                }
+                else if $(a[$(i)]) > $(b[$(i)]) {
+                    result = ">" ;
+                }
+            }
+        }
+    }
+
+    if $(result) = "<" {
+        return true ;
+    }
+}
+
+
+local rule map-tokens ( callback + : all-tokens * : * )
+{
+    local results ;
+
+    local tokens = $(all-tokens) ;
+    while $(tokens) {
+        results +=  [ $(callback) $(tokens[1-7])
+                      : $(tokens)
+                      : $(all-tokens)
+                      : $(3) : $(4) : $(5) : $(6) : $(7) : $(8)
+                    ] ;
+
+        tokens = $(tokens[8-]) ;
+    }
+    return $(results) ;
+}
+
+local rule best-version ( remaining-tokens + )
+{
+    local result ;
+
+    local rule max-test ( unique version extras + : * )
+    {
+        if  ! $(result) ||
+            ( $(result[1]) = $(unique)
+              && [ version-order $(max) $(version) ]
+            )
+        {
+            result = $(1) ;
+            max    = $(version) ;
+        }
+        else if $(result) && $(result[1]) = $(unique) && $(max) = $(version) {
+            echo "WARNING: duplicate libs:" ;
+
+            echo "\n\t- '$(result[1-10])'" ;
+            echo "----" ;
+            echo "\n\t- '$(1)'" ;
+        }
+    }
+
+    map-tokens max-test : $(remaining-tokens) ;
+
+    return $(result) ;
+}
+
+
+local rule best-uniques ( all-tokens * )
+{
+    local unique-names ;
+
+    local rule best ( unique extras + : tokens * : * )
+    {
+        if ! $(unique) in $(unique-names) {
+            unique-names += $(unique) ;
+            return [ best-version $(tokens) ] ;
+        }
+    }
+
+    return [ map-tokens best : $(all-tokens) ] ;
+}
+
+
+
+local rule alternate-type ( type )
+{
+    switch $(type) {
+        case static    : return shared    ;
+        case shared    : return static    ;
+
+        case tagged    : return untagged  ;
+        case untagged  : return tagged    ;
+    }
+}
+
+local rule threading-type ( threading-tag-type )
+{
+    switch $(threading-tag-type) {
+        case tagged    : return multi  ;
+        case untagged  : return single ;
+    }
+}
+
+
+local rule collect-inc ( tokens + : * )
+{   
+    if $(tokens[-1]) != "" {
+        return <include>$(tokens[-1]) ;
+    }
+}
+
+local rule find-lib ( basename link-type threading-tag-type : all-tokens * )
+{
+    local rule find ( unique
+                      version
+                      basename-token
+                      link-type-token
+                      threading-tag-type-token
+                      lib
+                      inc
+                    : *
+                    )
+    {
+        if $(basename) = $(basename-token)
+           && $(link-type) = $(link-type-token)
+           && $(threading-tag-type) = $(threading-tag-type-token)
+        {
+            return $(unique) ;
+        }
+    }
+
+    return [ map-tokens find : $(all-tokens) ] ;
+}
+
+
+feature.feature system-lib-rpath : no yes : optional incidental ;
+
+type.register SYSTEM_LIB : : LIB ;
+
+class prebuilt-system-lib-file-generator : generator
+{
+    import property-set ;
+
+    rule run ( project name ? : property-set : sources * )
+    {
+        local f = [ $(property-set).get <file> ] ;
+
+        local add-rpath = [ $(property-set).get <system-lib-rpath> ] ;
+
+        # no-rpath?
+        # need to create target with a null action 
+        #  - in order to prevent builtin.jam from adding xdll-paths
+        if $(add-rpath) != yes {
+            # set action 
+            module $(f) {
+                self.type   = SYSTEM_LIB ;
+                self.action = [ new null-action ] ;
+            }
+        }
+     
+        #echo creating-system-lib: $(f) [ $(f).name ] add-rpath: $(add-rpath) ;
+
+        return  [ virtual-target.register $(f) ] 
+                $(sources) # pass through any extra 
+                ;
+    }
+}
+
+generators.register
+    [ new prebuilt-system-lib-file-generator 
+            system-lib.prebuilt 
+            : : SYSTEM_LIB : <file>
+    ] ;
+
+
+local rule declare-lib  ( unique
+                          version
+                          basename
+                          link-type
+                          threading-tag-type
+                          lib
+                          inc
+                        : rem-tokens +
+                        : all-tokens *
+                        : requirements *
+                        : usage-requirements *
+                        : target-prefix ?
+                        : debug ?
+                        )
+{
+
+    local explicit-link ;
+    local explicit-threading ;
+
+    local link-alternate ;
+    local threading-alternate ;
+    local link-threading-alternate ;
+    local link-requirements ;
+    local threading-requirements ;
+
+    local req-link ;
+    local req-threading ;
+
+    req-link       = [ MATCH ^<link>(.*)$      : $(requirements) ] ;
+    threading-link = [ MATCH ^<threading>(.*)$ : $(requirements) ] ;
+
+    if $(threading-tag-type) != undefined
+    {
+        local tag = [ alternate-type $(threading-tag-type) ] ;
+
+        threading-alternate = [ find-lib
+                                $(basename)
+                                $(link-type)
+                                $(tag)
+                                : $(all-tokens) ] ;
+
+
+        link-threading-alternate  = [ find-lib
+                                      $(basename)
+                                      [ alternate-type $(link-type) ]
+                                      $(tag)
+                                    : $(all-tokens) ] ;
+    }
+
+    # with the existence of threading 'alternates'
+    # explicit-threading exists
+    if $(threading-alternate) || $(link-threading-alternate) {
+        explicit-threading = [ threading-type $(threading-tag-type) ] ;
+    }
+
+    link-alternate  = [ find-lib
+                        $(basename)
+                        [ alternate-type $(link-type) ]
+                        $(threading-tag-type)
+                      : $(all-tokens) ] ;
+
+    # with the existence of link 'alternates' explicit-link exists
+    if $(link-alternate) || $(link-threading-alternate) {
+        explicit-link = $(link-type) ;
+    }
+
+
+    # does linking require generated differentiation?
+    if ! $(req-link) && $(explicit-link) {
+        link-requirements += <link>$(explicit-link) ;
+
+        # do we need to differentiate this 'unecessarirly' for threading
+        #  , due to differentiation in counter-link-type?
+        if ! $(threading-alternate) && $(link-threading-alternate)  {
+            threading-requirements += <threading>single <threading>multi ;
+        }
+    }
+
+    # does threading require generated differentiation
+    if ! $(req-threading) && $(explicit-threading) {
+        if ! <threading>$(explicit-threading) in $(threading-requirements) {
+            threading-requirements += <threading>$(explicit-threading) ;
+        }
+    }
+
+
+    local rule debug-context ( )
+    {
+        echo "\t                     unique:" $(unique) ;
+        echo "\t                    version:" $(version) ;
+        echo "\t                   basename:" $(basename:) ;
+        echo "\t                  link-type:" $(link-type:) ;
+        echo "\t         threading-tag-type:" $(threading-tag-type:) ;
+
+        echo "\t              explicit-link:" $(explicit-link) ;
+        echo "\t         explicit-threading:" $(explicit-threading) ;
+        echo "\t             link-alternate:" $(link-alternate) ;
+        echo "\t        threading-alternate:" $(threading-alternate) ;
+        echo "\t   link-threading-alternate:" $(link-threading-alternate) ;
+        echo "\t                   req-link:" $(req-link) ;
+        echo "\t              req-threading:" $(req-threading) ;
+    }
+
+
+    # do not make lib if this doesn't match required and there exists a match
+    if ! (  $(req-link) && $(explicit-link)
+         && $(req-link) != $(explicit-link)
+         )
+    && ! (  $(req-threading) && $(explicit-threading)
+         && $(req-threading) != $(explicit-threading)
+         )
+    {
+
+        local default-req = <link>$(req-link) <threading>$(req-threading) ;
+
+        # does lib have an include path
+        if $(inc) != ""  {
+            usage-requirements += <include>$(inc) ;
+        }
+
+        # this may generate multiple requirement matches
+        # -- compiler/linker is smart enough to do the right thing
+        # -- this is necessary due to boost.build's requirement matching rules
+
+        link-requirements      += <link>$(req-link) ;
+        link-requirements      ?= "" ;
+
+        threading-requirements += <threading>$(req-threading) ;
+        threading-requirements ?= "" ;
+
+        local project = [ project.current ] ;
+
+        for local link-requirement in $(link-requirements)
+        {
+            for local threading-requirement in $(threading-requirements)
+            {
+                local reqs = $(requirements) ;
+
+                if $(link-requirement) != ""
+                   && ! $(link-requirement) in $(reqs)
+                {
+                    reqs += $(link-requirement) ;
+                }
+                if $(threading-requirement) != ""
+                   && ! $(threading-requirement) in $(reqs)
+                {
+                    reqs += $(threading-requirement) ;
+                }
+
+                if $(debug) {
+                    echo "from '$(lib)'" ;
+                    debug-context ;
+
+                    echo "\t----" ;
+                    echo "\t system-lib " $(target-prefix:E=)$(basename) ;
+                    echo "\t    : : <file>$(lib)"
+                       "\n\t        $(reqs)"
+                       "\n\t    : :" $(usage-requirements:J="\n\t        ")
+                       "\n\t    ;" ;
+                }
+
+                system-lib $(target-prefix:E=)$(basename)
+                    : : <file>$(lib)
+                        $(reqs)
+                    : : $(usage-requirements) ;
+
+                $(project).mark-target-as-explicit
+                    $(target-prefix:E=)$(basename) ;
+            }
+        }
+        return $(unique) ;
+    }
+    else if $(debug) {
+        echo "skipping '$(lib)'" ;
+        debug-context ;
+    }
+
+}
+
+
+local rule normalize-path ( path )
+{
+    # readlink/normalize
+    local target = [ READLINK $(path) ] ;
+    if $(target) {
+        path = $(target) ;
+    }
+    return [ path.make $(path) ] ;
+}
+
+local rule gristlibs-from-path  ( include-path ?
+                                : names +
+                                : exclude *
+                                : threading-tag ?
+                                : path )
+{
+    # for key, which must be deterministic
+    local key-names   = [ SORT $(names)   ] ;
+    local key-exclude = [ SORT $(exclude) ] ;
+          key-exclude ?= "" ;
+
+    local key = .gristlibs-from-path
+                $(include-path:E="")
+                $(key-names:J="|")
+                $(key-exclude:J="|")
+                $(path) ;
+    key = $(key:J=|) ;
+
+
+    if ! $($(key)) {
+
+        # patterns can result in duplicates
+        local libs =  [ sequence.unique
+                        [ path.glob $(path) : [ glob-lib-pattern
+                                                $(threading-tag)
+                                                : $(names)   ]
+                                            : [ glob-lib-pattern
+                                                $(threading-tag)
+                                                : $(exclude) ]
+                      ] ] ;
+
+
+        $(key) = $(libs:G=$(include-path:E="")) ;
+        $(key) ?= <none> ;
+    }
+
+    if $($(key)) != <none> {
+        return $($(key)) ;
+    }
+}
+
+# var for paths processed, cleared with every call to system-libs
+local .gristlibs-paths-processed ;
+
+local rule gristlibs-reset-paths ( )
+{
+    .gristlibs-paths-processed = ;
+}
+local rule gristlibs-from-new-path  ( include-path ?
+                                    : names +
+                                    : exclude *
+                                    : threading-tag ?
+                                    : path
+                                    )
+{
+    path = [ normalize-path $(path) ]  ;
+
+    if ! $(path) in $(.gristlibs-paths-processed) {
+        $(gristlibs-paths-processed) += $(path) ;
+
+        return [ gristlibs-from-path  $(include-path)
+                                    : $(names)
+                                    : $(exclude)
+                                    : $(threading-tag)
+                                    : $(path) ] ;
+    }
+}
+
+
+
+local rule homebrew-cellar-path ( )
+{
+    if ! $(.homebrew-cellar-path) {
+        .homebrew-cellar-path = [ SHELL "brew --cellar" : strip-eol ] ;
+        .homebrew-cellar-path ?= /usr/local/Cellar ;
+    }
+
+    return $(.homebrew-cellar-path) ;
+}
+
+local rule homebrew-cellar ( formula : version ? : with *  )
+{
+    local rule ver ( obj ) {
+        return [ MATCH \"version\":\"([^\"]*)\" : $(obj) ] ;
+    }
+
+    # cache
+    if ! $(.homebrew.$(formula)) {
+        local result =  [ SHELL "brew info --json=v1 $(formula)"
+                            : exit-status : strip-eol ] ;
+        if $(result[2]) = 0 {
+            .homebrew.$(formula) = $(result[1]) ;
+        }
+        else {
+            .homebrew.$(formula) = <invalid-formula> ;
+        }
+    }
+
+    # use
+    local json = $(.homebrew.$(formula)) ;
+
+    # -- if invalid
+    if $(json) = <invalid-formula> {
+        echo "Error: homebrew error for formula '$(formula)'" ;
+        echo "  - homebrew may not be installed " ;
+        echo "  - homebrew could be out of date " ;
+        echo "  - formula could not exist " ;
+        if $(with) {
+            echo ""
+            echo "  Note: formula $(formula) needs" --with-$(with) ;
+        }
+        exit ;
+    }
+
+
+    local version-obj ;
+    # hopefully brew doesn't change order of items in it's json!
+    # -- this could stop working -- not a proper json parser
+    local version-objs = [ MATCH ({\"version\":[^}]*}) : $(json) ] ;
+
+    # multiple versions?
+    if $(version-objs[2]) {
+        local find-version = $(version) ;
+        if ! $(find-version) {
+            find-version = [ MATCH \"linked_keg\":\"([^\"]*)\" : $(json) ] ;
+            if ! $(find-version) {
+                echo "Error: ambiguous homebrew formula '$(formula)'" ;
+                echo "  - has multiple installed versions " ;
+                echo "  - is not linked " ;
+                echo "  - no <homebrew-version> argument given " ;
+                echo "" ;
+                echo "  This ambiguity can be resolved by on of:" ;
+                echo "    - providing <homebrew-version> argument " ;
+                echo "    - linking one of the brew cellars " ;
+                echo "    - deleting all but one cellar" ;
+                echo "" ;
+                echo "  Run 'brew info $(formula)' for details" ;
+
+                if $(with) {
+                    echo ""
+                    echo "  Note: formula $(formula) needs" --with-$(with) ;
+                }
+                exit ;
+            }
+        }
+
+        for local obj in $(version-objs) {
+            if $(find-version) = [ ver $(obj) ] {
+                version-obj += $(obj) ;
+            }
+        }
+    }
+    else {
+        version-obj = $(version-objs) ;
+    }
+
+    if ! $(version-obj)
+    || ( $(version) &&  $(version) != [ ver $(version-obj) ] )
+    {
+        echo "Error: required homebrew formula '$(formula)'" ;
+
+        if ! $(version-obj) {
+            echo "  - not installed " ;
+        }
+        else {
+            echo "  - wrong version" ;
+            echo "            want:" $(version) ;
+            echo "            have:" [ ver $(version-obj) ] ;
+        }
+        echo "" ;
+        echo "  Run 'brew info $(formula)' for details" ;
+
+        if $(with) {
+            echo "" ;
+            echo "  Note: formula $(formula) needs" --with-$(with) ;
+        }
+        exit ;
+    }
+
+
+    # check -with ?
+    local missing-with = ;
+    if $(with) {
+        local options = [ MATCH \"used_options\":\\[([^\\]]*)\\]
+                            : $(version-obj) ] ;
+
+        for local w in $(with) {
+            if ! [ MATCH --with-$(w) : $(options) ] {
+                missing-with += --with-$(with) ;
+            }
+        }
+    }
+
+    if $(missing-with) {
+        echo "Error: required homebrew formula '$(formula)'" ;
+        echo "  - installed with missing options:"
+           "\n       "$(missing-with) ;
+        echo "" ;
+        echo "  Run 'brew info $(formula)' for details" ;
+        echo "" ;
+        echo "  Note: formula $(formula) needs" --with-$(with) ;
+        exit ;
+    }
+
+    if ! $(version) {
+        version = [ ver $(version-obj) ] ;
+    }
+
+
+    return [ path.join [ homebrew-cellar-path ] $(formula) $(version) ] ;
+}
+
+
+local rule homebrew-gristlibs   ( names +
+                                : exclude *
+                                : threading-tag ?
+                                : formula
+                                : version *
+                                : with *
+                                : debug ?
+                                )
+{
+    if $(version[2]) {
+        echo "Error: multiple <homebrew-version> properties found" ;
+        echo "  - versions: " '$(version)' ;
+        echo "  -  formula:"  '$(formula)' ;
+        exit ;
+    }
+
+    if $(.OS) = MACOSX {
+        local cellar = [ homebrew-cellar $(formula) : $(version) : $(with) ] ;
+
+        return [ gristlibs-from-new-path  $(cellar)/include
+                                        : $(names)
+                                        : $(exclude)
+                                        : $(threading-tag)
+                                        : $(cellar)/lib ] ;
+    }
+}
+
+
+local rule apt-rawlibs  ( pkg version ? )
+{
+    local key = apt.$(pkg).$(version:E="").rawlibs ;
+
+    if ! $($(key)) {
+        local cmd res ver ;
+
+        cmd = "dpkg -L $(pkg) | grep -E 'lib[^/]*\\.($(lib-exts:J=|))[^/]*$'" ;
+
+        res = [ SHELL $(cmd) : strip-eol : exit-status ] ;
+
+        if $(res[2]) = 0 {
+            $(key)  = [ SPLIT_BY_CHARACTERS $(res[1]) : "\n" ] ;
+
+            if $(version) {
+                ver = [ MATCH "^Version: (.*)$"
+                        : [ SHELL "dpkg -s $(pkg) | grep '^Version: '"
+                            : strip-eol ] ] ;
+
+                if $(ver) != $(version) {
+                    echo "Error: required apt package '$(pkg)'" ;
+                    echo "  - wrong version" ;
+                    echo "            want:" $(version) ;
+                    echo "            have:" $(ver) ;
+                    exit ;
+                }
+            }
+        }
+        else {
+            $(key)  = <none> ;
+        }
+    }
+
+    if $($(key)) != <none> {
+        return $($(key)) ;
+    }
+}
+
+local rule apt-gristlibs    ( names +
+                            : exclude *
+                            : threading-tag ?
+                            : package
+                            : version *
+                            : debug ?
+                            )
+{
+    if $(version[2]) {
+        echo "Error: multiple <apt-version> properties found" ;
+        echo "  - versions: " '$(version)' ;
+        echo "  -  package:"  '$(package)' ;
+        exit ;
+    }
+
+    if $(.OS) = LINUX {
+        local rawlibs pos neg libs ;
+
+        rawlibs = [ apt-rawlibs $(package) $(version) ] ;
+
+        pos = [ regex-match-files $(threading-tag) : $(names)
+                : $(rawlibs) ] ;
+
+        if $(exclude) {
+            neg = [ regex-match-files $(threading-tag) : $(exclude)
+                    : $(rawlibs) ] ;
+        }
+
+        if $(neg) {
+            libs = [ set.difference $(pos) : $(neg) ] ;
+        }
+        else {
+            libs = $(pos) ;
+        }
+
+        if $(debug) {
+            echo "apt pkg:" '$(package)' ;
+            echo "   rawlibs:" '$(rawlibs:J="'\n\t    '")' ;
+            echo "   matched:" '$(pos:J="'\n\t    '")' ;
+            echo "   exclude:" '$(neg:J="'\n\t    '")' ;
+        }
+
+        # no include, no grist
+        return $(libs) ;
+    }
+}
+
+# for testing
+rule test-best-libs ( threading-tag ? : gristlibs * )
+{
+    local result ;
+    local rule get-file ( * ) {
+        result += $(1[6]) ;
+    }
+
+    return  [   map-tokens
+                    get-file
+                :   [ best-uniques
+                        [ tokenize-gristlibs
+                              $(threading-tag:E="")
+                            : $(gristlibs) ] ]
+            ] ;
+}
+
+
+
+rule system-libs    ( names +
+                    : properties *
+                    : usage-requirements *
+                    )
+{
+
+    local   value-properties =
+                exclude
+                link
+                threading
+                target-prefix
+                threading-tag
+                headers-only
+             ;
+
+    local   empty-properties =
+                debug
+            ;
+
+    local   requirements ;
+
+    
+    # extract value-properties
+    for local var in $(value-properties) {
+        $(var) = [ MATCH ^<$(var)>(.*)$ : $(properties) ] ;
+    }
+
+    # extract empty-properties
+    for local var in $(empty-properties) {
+        $(var) = [ MATCH ^(<$(var)>).*$ : $(properties) ] ;
+    }
+
+    if --libfinder-debug in [ modules.peek : ARGV ] {
+        debug = true ;
+    }
+
+
+    if [ MATCH \\. : $(names) $(exclude) ] {
+        echo "Error: name or exclude patterns cannot contain '.'"
+        echo "    names:" '$(names)'
+        echo "  exclude:" '$(exclude)'
+        exit ;
+    }
+
+
+    # rest gristlib paths - to avoid duplication
+    gristlibs-reset-paths ;
+
+    # extract gristlibs from sources
+    local gristlibs ;
+
+    local rule next-pvs ( props * : name : before ) {
+        local result  = ;
+        local stopped = ;
+        while $(props) {
+            if ! $(stopped) {
+                if $(props[1]:G) = $(name) {
+                    result += $(props[1]:G=) ;
+                }
+                if $(props[1]:G) = $(before) {
+                    stopped = true ;
+                    return $(result) ;
+                }
+            }
+            props = $(props[2-]) ;
+        }
+        return $(result) ;
+    }
+
+    # add these in order of properties
+    local props = $(properties) ;
+    while $(props) {
+        local p = $(props[1]) ;
+        local grist = $(p:G) ;
+        if $(grist) {
+
+            if <os> = $(grist) {
+                local m = [ MATCH ^([A-Z]+):(.*)$ : $(p:G=) ] ;
+                if $(m) && $(m[1]) = $(.OS) {
+                    p = $(m[2]) ;
+                    grist = $(p:G) ;
+                }
+                else {
+                    p = ;
+                }
+            }
+
+            if <homebrew> = $(grist)  {
+                gristlibs += [ homebrew-gristlibs $(names)
+                                                : $(exclude)
+                                                : $(threading-tag)
+                                                : $(p:G=)
+                                                : [ next-pvs $(props)
+                                                    : <homebrew-version>
+                                                    : $(grist) ]
+                                                : [ next-pvs $(props)
+                                                    : <homebrew-with>
+                                                    : $(grist) ]
+                                                : $(debug) ] ;
+            }
+            else if <apt> = $(grist) {
+                gristlibs += [ apt-gristlibs  $(names)
+                                            : $(exclude)
+                                            : $(threading-tag)
+                                            : $(p:G=)
+                                            : [ next-pvs $(props)
+                                                    : <apt-version>
+                                                    : $(grist) ]
+                                            : $(debug) ] ;
+            }
+            else if <cc-search-dirs> = $(grist) {
+                for local cc-path in [ cc-search-paths ] {
+                    gristlibs += [ gristlibs-from-new-path  : $(names)
+                                                            : $(exclude)
+                                                            : $(threading-tag)
+                                                            : $(cc-path) ] ;
+                }
+            }
+            else if <path> = $(grist) {
+                gristlibs += [ gristlibs-from-new-path  : $(names)
+                                                        : $(exclude)
+                                                        : $(threading-tag)
+                                                        : $(p:G=) ] ;
+            }
+            else if [ feature.valid $(grist) ] {
+                requirements += $(p) ;
+            }
+        }
+        props = $(props[2-]) ;
+    }
+
+    if $(debug) {
+        echo "lib sources for:" '$(names)' ;
+        echo "           " '$(gristlibs:J="'\n\t    '")' ;
+        echo "" ;
+    }
+
+    local result ;
+
+    local all-tokens =  [ best-uniques
+                            [ tokenize-gristlibs $(threading-tag)
+                                : $(gristlibs) ] ] ;
+
+    
+    result =  [ map-tokens declare-lib
+                  : $(all-tokens)
+                  : $(requirements)
+                  : $(usage-requirements)
+                  : $(target-prefix)
+                  : $(debug)
+              ] ;
+    
+    if $(headers-only) 
+    {
+        local includes = [ sequence.unique 
+                            [ map-tokens collect-inc : $(all-tokens) ] 
+                         ] ;
+        
+        if $(debug) {
+            echo "\t----" ;
+            echo "\t alias" $(headers-only) ;
+            echo "\t    : :" $(requirements)   ; 
+            echo "\t    : :" $(usage-requirements) $(includes) ;
+            echo "\t    ;" ;
+        }
+
+        result += [ alias $(headers-only) 
+                      : : $(requirements)
+                      : : $(usage-requirements) $(includes)
+                  ] ;
+    }
+
+    if ! $(result) {
+        echo "Warning: failed to create system-libs:" '$(names)' ;
+    }
+
+    return $(result) ;
+}
+
+
+IMPORT $(__name__) : system-libs : : system-libs ;
+
+rule __test__ ( )
+{
+
+    import assert   ;
+    import sequence ;
+
+    assert.result             : version-order .2 .1 ;
+    assert.result true        : version-order .1 .2 ;
+
+    assert.result             : version-order "" .1 ;
+    assert.result true        : version-order .1 "" ;
+
+    assert.result             : version-order "" .1.1 ;
+    assert.result true        : version-order .1.1 "" ;
+
+    assert.result             : version-order .1 .1.1 ;
+    assert.result true        : version-order .1.1 .1 ;
+
+    assert.result .1 .2 .3 .4 .5   : sequence.insertion-sort .1 .2 .3 .4 .5   : version-order ;
+    assert.result .1 .2 .3 .4 .5   : sequence.insertion-sort .1 .2 .3 .5 .4   : version-order ;
+    assert.result .1.1 .1 .2.1 .2  : sequence.insertion-sort .1 .1.1 .2 .2.1  : version-order ;
+    assert.result .1 ""            : sequence.insertion-sort "" .1            : version-order ;
+    assert.result .1 ""            : sequence.insertion-sort .1 ""            : version-order ;
+    assert.result .5.4 ""          : sequence.insertion-sort "" .5.4          : version-order ;
+    assert.result .5.4 ""          : sequence.insertion-sort .5.4 ""          : version-order ;
+
+
+
+    assert.result .1.0.0    : MATCH ^libfoo(|\\..*)\\.so$ : libfoo.1.0.0.so             ;
+    assert.result ""        : MATCH ^libfoo(|\\..*)\\.so$ : libfoo.so                   ;
+    assert.result "" .1.0.0 : MATCH ^libfoo(|\\..*)\\.so$ : libfoo.so libfoo.1.0.0.so   ;
+
+
+
+    assert.result   foo|so "" foo shared undefined libfoo.so ""
+                :   tokenize-gristlibs : libfoo.so ;
+
+    assert.result   foo|so .1 foo shared undefined libfoo.so.1 ""
+                :   tokenize-gristlibs : libfoo.so.1 ;
+
+    assert.result   foo|so .1.1.0 foo shared undefined libfoo.so.1.1.0 /usr/include
+                :   tokenize-gristlibs : </usr/include>libfoo.so.1.1.0 ;
+
+    assert.result   foo|so .1 foo shared undefined libfoo.1.so /usr/include
+                :   tokenize-gristlibs : </usr/include>libfoo.1.so ;
+
+    assert.result   foo|so .1.1.0 foo shared undefined libfoo.1.1.0.so /usr/include
+                :   tokenize-gristlibs : </usr/include>libfoo.1.1.0.so ;
+
+    assert.result   foo-mt|so .1.1.0 foo shared tagged libfoo-mt.1.1.0.so /usr/include
+                :   tokenize-gristlibs -mt : </usr/include>libfoo-mt.1.1.0.so ;
+
+    assert.result   foo|so .1.1.0 foo shared untagged libfoo.1.1.0.so /usr/include
+                :   tokenize-gristlibs -mt : </usr/include>libfoo.1.1.0.so ;
+
+    assert.result   foo_r|so .1.1.0 foo shared tagged libfoo_r.1.1.0.so /usr/include
+                :   tokenize-gristlibs _r : </usr/include>libfoo_r.1.1.0.so ;
+
+    assert.result   foo|so .1.1.0 foo shared untagged libfoo.1.1.0.so /usr/include
+                :   tokenize-gristlibs _r : </usr/include>libfoo.1.1.0.so ;
+
+    assert.result   foo|so .2 foo shared undefined libfoo.1.so.2 ""
+                :   tokenize-gristlibs : libfoo.1.so.2 ;
+
+    assert.result libfoo.so   : test-best-libs :  libfoo.so   libfoo.so.1 ;
+    assert.result libfoo.so   : test-best-libs :  libfoo.so.1 libfoo.so   ;
+    assert.result libfoo.so   : test-best-libs :  libfoo.so   libfoo.1.so ;
+    assert.result libfoo.so   : test-best-libs :  libfoo.1.so libfoo.so   ;
+    assert.result libfoo.2.so : test-best-libs :  libfoo.2.so libfoo.1.so ;
+    assert.result libfoo.2.so : test-best-libs :  libfoo.1.so libfoo.2.so ;
+    assert.result libfoo.so.2 : test-best-libs :  libfoo.so.2 libfoo.1.so ;
+    assert.result libfoo.so.2 : test-best-libs :  libfoo.1.so libfoo.so.2 ;
+
+}

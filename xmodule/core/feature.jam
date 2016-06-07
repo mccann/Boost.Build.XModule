@@ -1,0 +1,66 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+##################################################################
+##
+##   core xmodule features
+##
+##################################################################
+
+# config option
+feature.feature xconfig              : : free ;
+feature.feature xpre-config-action   : : incidental free ;
+
+# repository  export features
+feature.feature xpath               : : free ;
+feature.feature xinclude            : : free ;
+feature.feature xorig-target-name   : : free incidental ;
+feature.feature xfile-type          : : free ;
+
+# xworkspace
+feature.feature xworkspace          : : free ;
+
+# regex pattern features that are ignored for target-path/properties 
+#       - '.*' is all
+feature.feature xvariant    : : free incidental ;
+
+# regex pattern features that are included in target-path/properties
+#       - '.*' is all
+feature.feature xinvariant  : : free incidental ;
+
+
+# regex pattern of 'config' features that are used for external builds
+#    - 'cxx|cflags|cxxflags' (example)  
+feature.feature xtoolset-inherit : : free ;
+
+# regex pattern of 'config' features that are NOT used for external builds
+#    - 'cc|cxx' (example)  
+feature.feature xtoolset-forfeit : : free ;
+
+# add value to a given xtoolset feature
+feature.feature xtoolset-ar         : : free ;
+feature.feature xtoolset-ranlib     : : free ;
+feature.feature xtoolset-nm         : : free ;
+feature.feature xtoolset-cc         : : free ;
+feature.feature xtoolset-cxx        : : free ;
+feature.feature xtoolset-cflags     : : free ;
+feature.feature xtoolset-cxxflags   : : free ;
+feature.feature xtoolset-ld         : : free ;
+feature.feature xtoolset-linkflags  : : free ;
+
+# url
+feature.feature xurl            : : free ;
+feature.feature xurl-handler    : : optional incidental ;
+
+
+# common build system features
+feature.feature xbuild-arg      : : free ; # build target/option
+feature.feature xbuild-jobs     : : free ; # build concurrency
+feature.feature xdist-arg       : : free ; # install target/option
+feature.feature xdist-jobs      : : free ; # install concurrency
+feature.feature xdist-location  : : free ; # dist location
+feature.feature xdist-staged    : no yes : optional incidental ;  
+
+

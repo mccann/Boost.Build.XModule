@@ -1,0 +1,8 @@
+
+# verify that regular prebuild system libs still work
+
+lib z ;
+
+lib z2 : : <name>z ;
+
+lib m : z : <name>m ;

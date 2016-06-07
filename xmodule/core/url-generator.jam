@@ -1,0 +1,13 @@
+
+class xmodule-url-generator : xmodule-generator
+{
+    rule invalid-inputs ( project name ? : property-set : sources * )
+    {
+        if ! $(sources) {
+            return "no source" ;
+        }
+        else if $(sources[2]) {
+            return "multiple sources" ;
+        }
+    }
+}

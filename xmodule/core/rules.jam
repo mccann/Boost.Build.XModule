@@ -1,0 +1,286 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+##  xmodule main target
+#
+#  - has the common boost.build signature,
+#    except that 'name' is optional
+#
+#  - name will be composed from source if empty
+
+rule xmodule-main-rule  ( name ?
+                        : sources *
+                        : requirements *
+                        : default-build *
+                        : usage-requirements *
+                        )
+{
+    # get rule-name from call stack
+    local bt = [ BACKTRACE 1 ] ;
+    local rule-name = $(bt[4]) ;
+
+    # get type from rule-name
+    local type = [ type.type-from-rule-name $(rule-name) ] ;
+    type.validate $(type) ;
+
+
+    local xrc = "!" ;
+    local is-xrepo = [ type.is-derived $(type)  XREPO ] ;
+    if $(is-xrepo) {
+        xrc = "?" ;
+    }
+
+    constrained-requirement $(rule-name) xfile-type "!" : $(requirements) ;
+    constrained-requirement $(rule-name) xpath      "!" : $(requirements) ;
+    constrained-requirement $(rule-name) name       "?" : $(requirements) ;
+
+    constrained-requirement $(rule-name) xurl       $(xrc) : $(requirements) ;
+    
+
+    local current-project = [ project.current ] ;
+    local project = $(current-project) ;
+
+    # main xmodule rules get their own xmodule-project!
+    if $(name) && [ type.is-derived $(type) XMODULE ] {
+        project = [ xmodule-project   $(project) 
+                                    : $(name) 
+                                    : $(type) 
+                                    : $(sources) 
+                                    : $(requirements) ] ;
+    }
+
+    local xurls  = [ xurl-filter $(name) : $(rule-name) : $(project)
+                      : $(sources) : $(requirements) ] ;
+    if $(xurls) {
+        if ! $(is-xrepo) {
+            errors.user-error
+                  "In rule '$(rule-name)'"
+                : "<xrepo-*> feature found"
+                : "Feature not supported on this type"
+                : "target:" $(name)
+                ;
+        }
+        sources      = [ MATCH ^<src>(.*)$ : $(xurls) ] ;
+        requirements = [ MATCH ^<req>(.*)$ : $(xurls) ] ;
+    }
+
+    # adjust empty name
+    name =  [ compose-empty-target-name $(rule-name)
+            : $(name) : $(sources) ] ;
+
+
+
+    # use 'current-project' for requirements
+    return [ targets.main-target-alternative [ new typed-target $(name) :
+        $(project) : $(type)
+        : [ targets.main-target-sources $(sources) : $(name) ]
+        : [ targets.main-target-requirements $(requirements) : $(current-project) ]
+        : [ targets.main-target-default-build $(default-build) : $(current-project) ]
+        : [ targets.main-target-usage-requirements $(usage-requirements) :
+            $(current-project) ] ] ] ;
+
+
+
+    return $(t) ;
+}
+
+rule register-xmodule-rules ( rules + )
+{
+    for local r in $(rules) {
+        IMPORT $(__name__) : xmodule-main-rule : : $(r) ;
+    }
+}
+
+register-xmodule-rules xbuild xdist xrepo ;
+
+
+
+
+
+local rule create-export-targets ( rule-name actual-type
+                                 : names *
+                                 : sources *         : requirements *
+                                 : default-build *   : usage-requirements *
+                                 )
+{
+
+    # do not add <xorig-target-name> for composed/implicit target names
+    local add-xorig-target-name ;
+    if $(names) {
+        add-xorig-target-name = true ;
+    }
+
+    # adjust empty name
+    names = [ compose-empty-target-name $(rule-name) : $(names) : $(sources) ] ;
+
+    # create target(s)
+    local project = [ project.current ] ;
+
+    local xurls  = [ xurl-filter $(names[1]) : $(rule-name) : $(project)
+                      : $(sources) : $(requirements) ] ;
+    if $(xurls) {
+        sources      = [ MATCH ^<src>(.*)$ : $(xurls) ] ;
+        requirements = [ MATCH ^<req>(.*)$ : $(xurls) ] ;
+    }
+
+    local result ;
+    for local name in $(names)
+    {
+        local r = $(requirements) ;
+        if $(add-xorig-target-name) {
+            r += <xorig-target-name>$(name) ;
+        }
+
+        # create a xmodule-typed-target
+        result += [ create-xmodule-typed-target
+                      $(actual-type)
+                    : $(project) : $(name) : $(sources) : $(r)
+                    : $(default-build) : $(usage-requirements) ] ;
+    }
+
+    return $(result) ;
+}
+
+.allow-xfile-type.rules = ;
+
+##  xfile main target rule
+rule xfile  ( names * : sources * : requirements *
+            : default-build * : usage-requirements * )
+{
+
+    # get rule-name from call stack (for when it is aliased)
+    local bt = [ BACKTRACE 1 ] ;
+    local rule-name = $(bt[4]) ;
+
+    # get type .. possibly having to remove leading x from rulename
+    local type = [ type.type-from-rule-name $(rule-name) ] ;
+    type      ?= [ type.type-from-rule-name [ MATCH ^x(.*)$
+                                                   : $(rule-name) ] ] ;
+    type.validate $(type) ;
+
+
+    # validate requirements
+    constrained-requirement $(rule-name) xpath "?"     : $(requirements) ;
+
+    local requirement-name = [ constrained-requirement $(rule-name) name "?"
+                               : $(requirements) ] ;
+    if $(names[2]) && $(requirement-name) {
+        errors.user-error
+              "In rule '$(rule-name)' with multiple names"
+            : "<name> feature found in requirements"
+            : "<name> can be only be used when no name, or one name" ;
+    }
+    local target-class ;
+
+    # With a true 'xfile', permit a <xfile-type> requirement
+    if $(rule-name) in $(.allow-xfile-type.rules) {
+        local xfile-type = [ constrained-requirement
+                             $(rule-name) xfile-type "?"
+                           : $(requirements)
+                           ] ;
+        if $(xfile-type) {
+            local valid = [ type.registered $(xfile-type) ] ;
+
+            # support ".cpp" syntax with a leading .
+            if ! $(valid) && [ MATCH ^(\.).+$ : $(xfile-type) ] {
+                local t = [ type.type $(xfile-type) ] ;
+                if $(t) {
+                    # replace requirement with new value
+                    # prevents duplicate targets error with syntactic
+                    # differences like:
+                    #   - <xfile-type>C
+                    #   - <xfile-type>.c
+
+                    requirements = [ set.difference $(requirements)
+                                     : <xfile-type>$(xfile-type) ]
+                                     ;
+                    requirements += <xfile-type>$(t) ;
+                    valid = true ;
+                }
+            }
+            if ! $(valid) {
+                errors.user-error
+                    "In rule '$(rule-name)'"
+                  : "<xfile-type>$(xfile-type) does not indicate a valid type"
+                  : "You can specify a type directly: <xfile-type>CPP "
+                  : "Or indirectly by suffix: <xfile-type>.cpp " ;
+            }
+        }
+    } else {
+        constrained-requirement $(rule-name) xfile-type "!" : $(requirements) ;
+    }
+
+    # create targets
+    return [ create-export-targets
+                $(rule-name) $(type)
+              : $(names)
+              : $(sources) : $(requirements) : $(default-build)
+              : $(usage-requirements) ] ;
+}
+
+rule register-xfile-rule ( rule : allow-xfile-type ? )
+{
+    if $(allow-xfile-type) {
+        .allow-xfile-type.rules += $(rule) ;
+    }
+
+    IMPORT $(__name__) : xfile : : $(rule) ;
+}
+
+register-xfile-rule xfile : allow-xfile-type ;
+register-xfile-rule xlib  ;
+
+
+##  xinclude main target rule
+rule xinclude   ( names * : sources * : requirements *
+                : default-build * : usage-requirements * )
+{
+
+    # validate requirements
+    constrained-requirement xinclude xpath      "!" : $(requirements) ;
+    constrained-requirement xinclude xfile-type "!" : $(requirements) ;
+
+    local xincludes = [ constrained-requirement
+                          xinclude xinclude "*" : $(requirements) ] ;
+    if $(names[2]) && $(xincludes) {
+        errors.user-error
+            "In rule 'xinclude' with multiple names"
+          : "<xinclude> feature found in requirements"
+          : "<xinclude> can be only be used when no name, or one name" ;
+    }
+
+    # create targets
+    return [ create-export-targets xinclude XINCLUDE : $(names)
+                : $(sources)        : $(requirements)
+                : $(default-build)  : $(usage-requirements) ] ;
+}
+
+
+# make 'xinclude' available everywehre
+IMPORT $(__name__) : xinclude : : xinclude ;
+
+
+
+##  reference-main-target
+rule xport-main-target ( name : sources * : requirements *
+                  : default-build * : usage-requirements * )
+{
+    # get rule-name from call stack (for when it is aliased)
+    local bt = [ BACKTRACE 1 ] ;
+    local rule-name = $(bt[4]) ;
+
+    # validate requirements
+    constrained-requirement $(rule-name) $(rule-name) "?" : $(requirements) ;
+
+    # create targets
+    return [ create-export-targets
+               $(rule-name) [ type.type-from-rule-name $(rule-name) ]
+             : $(name)
+             : $(sources) : $(requirements)
+             : $(default-build) : $(usage-requirements) ] ;
+}
+
+# make 'xrsrc' available everywehre
+IMPORT $(__name__) : xport-main-target : : xrsrc ;
+IMPORT $(__name__) : xport-main-target : : xpath ;

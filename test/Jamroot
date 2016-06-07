@@ -1,0 +1,5 @@
+path-constant ROOT : .. ;
+
+
+
+modules.load xmodule : $(ROOT)/xmodule.jam ;

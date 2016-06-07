@@ -1,0 +1,347 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+class xmodule-workspace-target
+{
+    rule __init__ ( workspace )
+    {
+        self.workspace = $(workspace) ;
+    }
+
+    rule workspace ( )
+    {
+        return $(self.workspace) ;
+    }
+}
+
+# class's name is just :type, to make path/name unique
+class typed-path-target :  abstract-file-target
+{
+    import common ;
+
+    rule __init__ ( name : type ? : project : action ? : make-path ?  )
+    {
+        # name is the path
+        self.path = $(name) ;
+
+        if $(make-path) {
+            self.make-path = true ;
+        }
+
+        abstract-file-target.__init__  ":$(type:L)" exact : $(type)
+                                       : $(project) : $(action) ;
+    }
+
+    rule actualize-location ( target )
+    {
+        NOUPDATE $(target) ;
+
+        if $(self.make-path) {
+            DEPENDS $(target) : $(self.path) ;
+            common.MkDir $(self.path) ;
+        }
+    }
+
+    rule path ( )
+    {
+        return $(self.path) ;
+    }
+
+    # use <type>path
+    rule actual-name ( )
+    {
+        if ! $(self.actual-name)
+        {
+            local basename = [ path.native $(self.path) ] ;
+            self.actual-name = <$(self.type:L)>$(basename) ;
+        }
+        return $(self.actual-name) ;
+    }
+}
+
+class xmodule-workspace-file-target
+        :   xmodule-workspace-target
+            file-target
+{
+    import assert ;
+    
+    rule __init__ ( name : type ? : workspace : project : action ? : path ? : permit-type-change ? )
+    {
+        file-target.__init__  $(name) exact : $(type)
+                                  : $(project) : $(action) : $(path) ;
+        xmodule-workspace-target.__init__ $(workspace) ;
+
+        self.permit-type-change = $(permit-type-change) ;
+    }
+
+    rule change-type ( type ) 
+    {
+        assert.equal permit-type-change : $(self.permit-type-change) ;
+        self.type = $(type) ;
+    }
+}
+
+class xmodule-workspace-typed-path-target
+        :   xmodule-workspace-target
+            typed-path-target
+{
+    rule __init__ ( name : type ? : workspace : project : action ? : make-path ?  )
+    {
+        typed-path-target.__init__  $(name) : $(type)
+                                  : $(project) : $(action) : $(make-path) ;
+        xmodule-workspace-target.__init__ $(workspace) ;
+    }
+}
+
+class xmodule-target
+{
+    import assert ;
+    import type ;
+
+    rule __init__ ( xroot parent ? )
+    {
+        assert.true type.is-derived [ type ] XMODULE ;
+
+        self.xroot = $(xroot) ;
+
+        self.parent = $(parent) ;
+        if ! $(self.parent) {
+            self.xmodule = $(__name__) ;
+        }
+        else {
+            self.xmodule = [ $(self.parent).xmodule ] ;
+        }
+   }
+
+    # path to the root of xmodule
+    rule xroot-path ( )
+    {
+        return [ $(self.xroot).path ] ;
+    }
+
+    # default implementation has no relative path
+    rule xpath ( )
+    {
+        return [ $(self.xroot).path ] ;
+    }
+
+    rule xroot ( )
+    {
+        return $(self.xroot) ;
+    }
+
+    rule xmodule ( )
+    {
+        return $(self.xmodule) ;
+    }
+
+    rule export-path,name ( rsrc )
+    {
+        # rooted resource ?
+        local result ;
+        local m = [ MATCH ^(/)(.*)$ : $(rsrc) ] ;
+        if $(m) {
+            result  = [ xroot-path ] ;
+            if $(m[2]) {
+                result += $(m[2]) ;
+            }
+        } else {
+            result  = [ xpath ] ;
+            result += $(rsrc) ;
+        }
+#         echo export-path,name: $(result) from xroot: [ xroot-path ] xpath: [ xpath ] rsrc: $(rsrc)  ;
+        return $(result) ;
+    }
+    rule export ( rsrc )
+    {
+        return [ path.join [ export-path,name $(rsrc) ] ] ;
+    }
+}
+
+class xmodule-xpath-target
+        :   xmodule-target
+            xmodule-workspace-typed-path-target
+{
+    rule __init__   ( name : type : project : action
+                    : xroot parent )
+    {
+        xmodule-workspace-typed-path-target.__init__ $(name)
+            : $(type) : [ $(xroot).workspace ] : $(project) : $(action) ;
+
+        xmodule-target.__init__  $(xroot) $(parent) ;
+    }
+
+    # for xpath-target's, this is no longer relative
+    rule xpath ( )
+    {
+        return $(self.path) ;
+    }
+
+}
+
+
+class xmodule-xmodule-final-target
+        :   xmodule-target
+            xmodule-workspace-typed-path-target
+{
+    import "class" : new ;
+    
+    rule __init__   ( xroot : sources * : type : project )
+    {
+        local workspace = [ $(xroot).workspace ] ;
+        local action =  [ new non-scanning-action $(sources) 
+                            : xmodule.finalize-xmodule
+                            : [ $(workspace).properties ]  
+                        ] ;
+
+        xmodule-workspace-typed-path-target.__init__ [ $(xroot).path ]
+            : $(type) : $(workspace) : $(project) : $(action) ;
+        xmodule-target.__init__  $(xroot) ;
+
+    }
+}
+
+rule finalize-xmodule ( targets * : sources * : properties * )
+{
+    # do nothing
+}
+
+class typed-notfile-target : notfile-target
+{
+    import string : join ;
+   
+    rule __init__ ( name : type ? : project : action ?   )
+    {
+        abstract-file-target.__init__ $(name) exact
+            : $(type) : $(project) : $(action) ;
+    }
+
+    rule actualize-location ( target )
+    {
+        NOTFILE  $(target) ;
+        NOUPDATE $(target) ;
+    }
+
+    rule grist ( )
+    {
+        return  [ join  [ type.type-to-rule-name $(self.type) ] 
+                        [ path ]
+                    : ":" ] ;
+    }
+}
+
+class xmodule-rsrc-target
+        :   xmodule-target
+            xmodule-workspace-target
+            typed-notfile-target
+{
+    rule __init__   ( name : type : project : action ?
+                    : xroot parent )
+    {
+        typed-notfile-target.__init__
+              $(name) : $(type)
+            : $(project) : $(action)  ;
+
+        xmodule-target.__init__
+              $(xroot) $(parent) ;
+
+        xmodule-workspace-target.__init__
+              [ $(xroot).workspace ] ;
+    }
+
+    rule grist ( )
+    {
+        return  [ join  [ type.type-to-rule-name $(self.type) ] 
+                        [ xpath ]
+                    :   ":" ] ;
+    }
+}
+
+
+
+rule no-action ( targets * : sources * : requirements * )
+{
+}
+
+
+
+
+
+
+rule source-dependent-file-target   ( project 
+                                    : source 
+                                    : prefix-dir postfix 
+                                    : action type ?
+                                    )
+{
+    local src-ps ;
+    local src-prefix ;
+    local src-path ;
+    {
+        local src-action  = [ $(source).action ] ;
+        if $(src-action) {
+            src-ps   = [ $(src-action).properties ] ;
+            src-path = [ $(source).path ] ;
+
+            #if 'rooted' path, unroot into build-dir
+            if $(src-path) {
+            
+                local src-project = [ $(source).project ] ;
+                local build-dir   = [ $(src-project).build-dir ] ;
+            
+                local rule fixup ( path ? ) 
+                {
+                    return [ path.native [ path.make [ 
+                                path.join $(build-dir) $(prefix-dir) $(path) 
+                           ] ] ] ;
+                }
+
+                local p = [ path.make $(src-path) ] ;
+                if [ path.is-rooted $(p) ] {
+                    local rpl = [ path.root 
+                                    [ $(src-project).location ] 
+                                    [ PWD ] ] ;
+
+                    if $(p) = $(rpl) {
+                        src-path = [ fixup ] ;
+                    }
+                    else {
+                        
+                        local r1 = [ path.relative $(p) $(rpl) ] ;
+                        local r2 = [ path.relative $(rpl) $(p) ] ;
+                    
+                        if $(r1) = $(r2) && $(r1) = . {
+                            src-path = [ fixup ] ;
+                        }
+                        else if $(r1) != . {
+                            src-path = [ fixup $(r1) ] ;
+                        }
+                        else {
+                            src-path = [ fixup root$(p) ] ;
+                        }
+                    }
+                }
+                else {
+                    src-path =  [ fixup $(src-path) ] ;
+                }
+            }
+        }
+        if ! $(src-path) {
+            src-prefix = $(prefix-dir)/ ;
+        }
+    }
+
+    local src-name = [ $(source).name ] ;
+    
+    local a = [ new non-scanning-action $(source) 
+                    : $(action) 
+                    : $(src-ps) ] ;
+
+    return  [ virtual-target.register 
+                [ new file-target 
+                        $(src-prefix:E)$(src-name)$(postfix) exact
+                    : $(type) : $(project) : $(a) 
+                    : $(src-path) ] ] ;
+}

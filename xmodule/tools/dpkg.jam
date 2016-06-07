@@ -1,0 +1,434 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+##################################################################
+## This module provides support for building debian packages '.deb' 
+##################################################################
+
+# <xdpkg-name>          * package name 
+#
+# <xdpkg-version>       * package version  # will be overriden by: --dpkg-version=VERSION
+#                         - ex: 2.57 
+#
+# <xdpkg-description>   * package description  -- can have newlines
+#
+# <xdpkg-release>       * package release
+#
+# <xdpkg-arch>          * package arch
+#                         - ex: amd64
+#                     
+# <xdpkg-maintainer>    * package maintainer 
+#                         - ex: "bob@foo.com"
+# 
+# <xdpkg-license>       * package license 
+#                         - ex: "BSD 3 clause"
+# 
+# <xdpkg-group>         * package group 
+#                         - ex: "Silly Hat Utilities"
+# 
+# <xdpkg-provides>      * package provides
+#
+# <xdpkg-requires>      * package requires - package dependencies
+#                         - for syntax:
+#                         - note: this will join multiple properties with ',' and escape "()<>" characters automatically 
+#                         - http://stackoverflow.com/questions/18365600/how-to-manage-multiple-package-dependencies-with-checkinstall
+#
+# <xdpkg-exclude>       * exclude files from package 
+#
+# <xdpkg-include>       * include files from package
+#
+# <xdpkg-strip>         * yes|no, strip binaries 
+#
+# <xdpkg-stripso>       * yes|no, strip shared libs
+#
+##
+## see checkinstall manpage for details on the above features
+##
+#
+# <xdpkg-sysroot>       * system root, default "/"
+#
+
+# command-line args:
+
+# --xdpkg-target-path=PATH  * where to put generated dpkg
+#                             - relative to CWD
+#                             - by default in usual build-dir-path
+#
+# --xdpkg-<FEATURE>=VALUE   * same as 'key' values as features above
+#                             - overrides any <xdpkg-PROPERTY> of the same name  
+#                             - example: --xdpkg-version=2.15 
+
+
+# TODO: build in a folder with known file contents
+#       - write description-pak to that file-dir using @(..)
+#       - use semaphore to prevent clobbering
+
+# TODO: make dpkg install rule/generator
+#       - use 'sudo dpkg -i {path/file.deb}'
+#       - use permit jam projects to depend on installation of deb
+#       - possibly permit skip of building package if already installed
+
+
+
+import type ;
+import feature : feature ;
+import "class" : new ;
+import generators ;
+import toolset ;
+import build-jobs-arg ;
+import path ;
+import xmodule ;
+import regex ;
+import sequence ;
+
+type.register XDPKG : deb ;
+type.register XDPKG_GEN_LOG ;
+
+
+# register features 
+
+.pkg-args 
+    =   name 
+        version 
+        release
+        arch
+        license
+        group
+    ;
+
+.plain-args
+    =   provides
+        requires
+    ;
+
+.filter-args
+    =   exclude
+        include
+    ;
+
+.yesno-args
+    =   strip
+        stripso
+    ;
+
+
+.all-args 
+    = $(.pkg-args) $(.plain-args) $(.filter-args) $(.yesno-args) target-path description
+    ;
+
+for local f in $(.pkg-args) $(.plain-args) $(.filter-args) description
+{
+    feature xdpkg-$(f)  : : free ;
+}
+
+for local f in $(.yesno-args)
+{
+    feature xdpkg-$(f)  : yes no : optional incidental ;
+}
+
+
+xmodule.register-xmodule-rules xdpkg ;
+
+
+# setup --xdpkg-FEATURE feature
+
+for local global in [ MATCH ^(--xdpkg-.*=.*)$ : [ modules.peek : ARGV ] ] {
+    local used = ;
+    local m = [ MATCH ^--xdpkg-(.*)=(.*)$ : $(global) ] ;
+    if $(m) && $(m[1]) in $(.all-args) {
+        .xdpkg-global.$(m[1]) = $(m[2]) ;
+    }
+    else {
+        echo "Warning: xdpkg is ignoring $(global) -- bad format or unknown argument" ;
+    }
+}
+
+
+# return <arg>VALUE KV
+rule xdpkg-args ( properties * ) 
+{
+
+    local rule get ( arg ) {
+        local value = ;
+        
+        value = $(.xdpkg-global.$(arg)) ;
+        if ! $(value) {
+            value = [ MATCH ^<xdpkg-$(arg)>(.*)$ : $(properties) ] ;
+        }
+        return $(value:G=$(arg)) ;
+    }
+
+    return [ sequence.transform get : $(.all-args) ] ;
+}
+rule xdpkg-arg ( arg : xdpkg-args * : require_one ? )
+{
+    local result = [ MATCH ^<$(arg)>(.*)$ : $(xdpkg-args) ] ;
+    if $(require_one) {
+        if ! $(result) {
+            xmodule.basic-generator-error
+                   "Cannot create dpkg - missing '$(arg)' property!"
+                :  "use <xdpkg-$(arg)> or --xdpkg-$(arg)=" ;        
+        }
+        if $(result[2-]) {
+            xmodule.basic-generator-error                    
+                   "Cannot create dpkg - duplicate properties (via property or commandline):"
+                : "\n    xdpkg-$(arg):\n\t'$(result)'\n" 
+                ;        
+        }
+    }
+    return $(result) ;
+} 
+
+##################################################################
+##
+##   xdpkg export generator
+##
+##################################################################
+
+class xdpkg-export-generator : xmodule-export-generator
+{
+    import xmodule       : construct-workspace  ;
+    import xmodule-dpkg  : xdpkg-args xdpkg-arg ;
+
+    rule pkg-names ( target-name : xmpaths * : xdpkg-args * )
+    {
+        local name      = [ xdpkg-arg name    : $(xdpkg-args) : require_one ] ;
+        local version   = [ xdpkg-arg version : $(xdpkg-args) : require_one ] ;
+        local release   = [ xdpkg-arg release : $(xdpkg-args) ] ;
+        local arch      = [ xdpkg-arg arch    : $(xdpkg-args) : require_one ] ;
+       
+        if ! $(release) {
+            release = "" -1 ; # actual and 'default'
+        } else {
+            release = -$(release) ;
+        }
+
+        return $(name)_$(version)$(release)_$(arch).deb ;
+    }
+
+    rule generated-targets ( xmpaths * : property-set : project name )
+    {
+
+
+        # construct workspace
+        local workspace = [ construct-workspace $(project) 
+                                $(name)
+                              : 
+                                # by default, workspace is mostly variant
+                                [ xvariant-ps $(property-set) : : ] 
+                              : $(xmpaths) 
+                          ] ;
+
+
+        local workpath   = [ $(workspace).path ] ;
+        local xdpkg-args = [ xdpkg-args [ $(property-set).raw ] ] ;
+
+        # target-path 
+        local target-path = [ xdpkg-arg target-path : $(xdpkg-args) ] ;
+        target-path ?= $(workpath) ;
+        
+        local a = [ new action $(xmpaths)
+                        : xmodule-dpkg.checkinstall
+                        : [ $(workspace).refine $(property-set) ] ] ;
+
+        local pkgnames = [ pkg-names $(name) : $(xmpaths) : $(xdpkg-args) ] ;
+    
+        local t = [ virtual-target.register
+                    [ new xmodule-workspace-file-target
+                          $(pkgnames[1])
+                        : XDPKG : $(workspace) : $(project)
+                        : $(a) : $(target-path) ] ] ;
+
+        virtual-target.register
+            [ new xmodule-workspace-file-target 
+                  log/$(name)-checkinstall.log
+                : : $(workspace) : $(project)
+                : $(a) : $(workpath) ] ;
+
+  
+        # 'actual' name?
+        if $(pkgnames[2]) {
+            t += [ virtual-target.register
+                    [ new xmodule-workspace-file-target
+                          $(pkgnames[2])
+                        : XDPKG : $(workspace) : $(project)
+                        : $(a) : $(target-path) ] ] ;
+        }
+
+
+        return  [ property-set.empty ] 
+                $(t[1]) ;
+    }
+}
+
+#generators.register [ new xdpkg-export-generator dpkg : XPATH+ !XRSRC  : : XDPKG ] ;
+xmodule.register-export-generators xdpkg XDPKG composing ;
+
+
+toolset.flags $(__name__).checkinstall XDPKG_SYSROOT : <xdpkg-sysroot> ;
+
+rule checkinstall ( targets * : sources * : properties * )
+{
+    DPKG_OPTIONS on $(targets) 
+        =   --install=no 
+            --fstrans=yes 
+            --nodoc
+            --default
+            --deldesc
+            --backup=no
+        ;
+
+    local filter-$(.filter-args) ;
+    local plain-$(.plain-args)   ;
+
+    local xdpkg-args = [ xdpkg-args $(properties) ] ;
+ 
+    for local arg in $(.pkg-args) {
+        local value = [ xdpkg-arg $(arg) : $(xdpkg-args) ] ;
+        if $(value) {
+            DPKG_OPTIONS on $(targets) += "--pkg$(arg) '$(value)'" ;
+        }
+    }
+    for local arg in $(.yesno-args) {
+        local value = [ xdpkg-arg $(arg) : $(xdpkg-args) ] ;
+        if $(value) {
+            DPKG_OPTIONS on $(targets) += "--$(arg)=$(value)" ;
+        }
+    }
+    for local arg in $(.plain-args) {
+        local value = [ xdpkg-arg $(arg) : $(xdpkg-args) ] ;
+        if $(value) {
+            plain-$(arg) += $(value) ;
+        }
+    }
+    for local arg in $(.filter-args) {
+        local value = [ xdpkg-arg $(arg) : $(xdpkg-args) ] ;
+        if $(value) {
+            filter-$(arg) += $(value) ;
+        }
+    }
+    
+    # escape/join plain 'requires'
+    {
+        local escaped ;
+        for local r in $(plain-requires) {
+            escaped += [ regex.escape $(r) : "()<>" : \\ ] ;
+        }
+        plain-requires = $(escaped:J=,) ;
+    }
+
+    # 'plain' args
+    for local arg in $(.plain-args) {
+        DPKG_OPTIONS on $(targets) += "--$(arg)='$(plain-$(arg))'" ;
+    }
+
+    # build find filter
+    {
+        for local arg in $(.filter-args) {
+            filter-$(arg) = "\\( -path '$(filter-$(arg):J=' -o -path ')' \\)" ;
+        }
+
+        if $(filter-exclude) && $(filter-include) {
+            FILTER on $(targets) = "\\( ! $(filter-exclude) -o $(filter-include) \\)" ;
+        }
+        else if $(filter-exclude) {
+            FILTER on $(targets) = "! $(filter-exclude)" ;
+        }
+    }
+
+    DESCRIPTION on $(targets) = [ xdpkg-arg description : $(xdpkg-args) : require_one ] ; 
+
+    if $(targets[3]) {
+        TEMPORARY $(targets[3]) ;
+    }
+}
+
+
+.CWD = [ PWD ] ;
+
+XLOG = [ xmodule.logfile-action : ": cleanup " cleanup ] ;
+
+actions checkinstall
+{
+    $(XLOG[1])="$(<[2])"
+    
+    blddir=$(<[1]:R=$(.CWD)).build
+    tmpdir=$(<[1]:R=$(.CWD)).tmp
+    oldpkg=$(<[1]:R=$(.CWD)).old
+    pkgdir=$(<[1]:DR=$(.CWD))
+    tmppkg1=${tmpdir}/$(<[1]:D=)
+    tmppkg2=${tmpdir}/$(<[3]:D=)
+    pkg=$(<[1])
+    
+    cleanup () {
+        # : remove build-dir
+        rm -vrf ${blddir}
+
+        # : remove tmp dir
+        rm -vrf ${tmpdir}
+
+        # : remove old package
+        rm -vf ${oldpkg}
+    }
+
+    {
+        set -e 
+
+        cleanup && {
+        
+            : make new build dir
+            mkdir -v "${blddir}" 
+        
+        } && {
+        
+            : make new temp dir
+            mkdir -v "${tmpdir}" 
+        
+        }  && (
+            
+            : change to build dir
+            cd "${blddir}"
+
+            : output script to run
+            cat > copy_files.sh <<"COPY_FILES"
+#!/bin/sh
+
+set -ex
+for srcdir in "$(>:R=$(.CWD))" ; do 
+    ( 
+        cd "${srcdir}" 
+        find . ! -type d $(FILTER) -printf '%P\0' \
+            | xargs -0 -I % cp -dv --parents "%" / 
+    ) 
+done
+COPY_FILES
+            : output description-pak
+            cat > description-pak <<"DESCRIPTION_PAK"
+$(DESCRIPTION)
+DESCRIPTION_PAK
+
+            : build package
+            checkinstall --pakdir "${tmpdir}" $(DPKG_OPTIONS) sh ./copy_files.sh
+        
+        ) && {
+
+            : "move current to old  (if exists)"
+            mv "${pkg}" "${oldpkg}" 2>/dev/null || : 
+
+            : move new to current
+            if [ -n "${tmppkg2}" ] ; then
+                mv "${tmppkg2}" "${pkg}"
+            else  
+                mv "${tmppkg1}" "${pkg}" 
+            fi   
+
+        } && {
+
+            cleanup
+        }
+
+    } $(XLOG[2])
+
+}

@@ -1,0 +1,18 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+class xinclude-export-generator : xmodule-export-generator
+{
+    rule generated-targets ( xmpath : property-set : project name ? )
+    {
+        local targets = [ path-targets XINCLUDE $(project)
+                                       $(xmpath) $(property-set) "*" ] ;
+
+        if $(targets) {
+            return [ xinclude-property-set $(xmpath) : $(targets) ] ;
+        }
+    }
+}
+
+

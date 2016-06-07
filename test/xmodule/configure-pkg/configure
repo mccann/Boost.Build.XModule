@@ -1,0 +1,88 @@
+#!/bin/bash
+
+prefix=${1//--prefix=/}
+prefix=${prefix:-/usr/local/}
+
+configure_args="${2}"
+
+env 
+# build a makefile
+(
+    if [ -n "${CC}" ] ; then 
+        echo -e "CC = ${CC}"
+    fi
+    if [ -n "${CFLAGS}" ] ; then 
+        echo -e "CFLAGS = ${CFLAGS}"
+    fi
+
+    echo -e "all: lib/foo.a include"
+    echo -e "\ttouch built"
+    echo -e "\t"'echo "char* message() { return \"out\"; }" > message.out'
+    echo -e "\t"'echo "char* message() { return \"hhh\"; }" > message.h'
+    echo -e "\t"'echo "char* message() { return \"ccc\"; }" > message.c'
+    echo -e "\tmkdir -p msg"
+    echo -e "\t"'echo "char* message() { return \"helo\"; }" > msg/hello.c'
+    echo -e "\tmkdir -p msg/foo"
+    echo -e "\t"'echo "char* message() { return \"folo\"; }" > msg/foo/hello.h'
+
+    if [ ! -z "$buildconf_args" ] ; then
+        echo -e "\techo \"$buildconf_args\" > buildconf_args.out"
+    fi
+
+    if [ ! -z "$configure_args" ] ; then
+        echo -e "\techo \"$configure_args\" > configure_args.out"
+    fi
+
+    echo -e ""
+    echo -e "foo.o : foo.c"
+    echo -e "\t\$(CC) \$(CFLAGS) -c foo.c -o foo.o -DLIB_NAME=\\\"$configure_args\\\""
+
+    echo -e ""
+    echo -e "lib/foo.a: foo.o"
+    echo -e "\tmkdir -p lib"
+    echo -e "\t\$(AR) rcs lib/foo.a foo.o"
+
+    echo -e ""
+    echo -e "include:"
+    echo -e "\tmkdir -p include"
+    echo -e "\techo '#define LIBFOO 0.8' > include/foo.h "
+    echo -e "\techo 'int foo_func();' >> include/foo.h"
+    echo -e "\tmkdir -p headers"
+    echo -e "\techo '#define LIBBAR 0.8' > headers/bar.h "
+    echo -e "\techo 'int bar_func();' >> headers/bar.h"
+
+    echo -e ""
+    echo -e "tests:"
+    echo -e "\techo \"tests\" > tests.out"
+
+    echo -e ""
+    echo -e "install:"
+    echo -e "\ttouch $prefix/installed"
+    echo -e "\tcp message.out $prefix/"
+    echo -e "\tcp message.h $prefix/"
+    echo -e "\tcp message.c $prefix/"
+    echo -e "\tcp -a msg $prefix/"
+    echo -e "\tcp -a lib $prefix/"
+    echo -e "\tcp -a include $prefix/"
+    echo -e "\tmkdir -p $prefix/src"
+    echo -e "\tcp foo.c $prefix/src/"
+    if [ ! -z "$configure_args" ] ; then
+        echo -e "\tcp configure_args.out $prefix/"
+    fi
+
+    echo -e "extras:"
+    echo -e "\techo \"extras\" > $prefix/extras.install"
+
+
+) > Makefile
+
+
+# build a c file for testing
+(
+    echo "#include <stdio.h>"
+    echo "int foo_func() { "
+    echo "    printf( \"Hello World! args=%s\\n\", LIB_NAME );"
+    echo "    return 5;"
+    echo "}"
+
+) > foo.c

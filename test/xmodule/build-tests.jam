@@ -1,0 +1,279 @@
+
+
+##
+## test autotools configure build
+xbuild  pkg1        : configure-pkg/configure ;
+xfile   pkg1.built  : pkg1 : <name>built ;
+xdist   pkg1.local  : pkg1 ;
+xfile   pkg1.inst   : pkg1.local : <name>installed ;
+
+##
+## test xfile xpath feature, and ability to root paths
+xfile   pkg1.hello.1 : pkg1.local :                 <name>msg/foo/hello.h ;
+xfile   pkg1.hello.2 : pkg1.local : <xpath>msg      <name>foo/hello.h ;
+xfile   pkg1.hello.3 : pkg1.local : <xpath>msg/foo  <name>hello.h ;
+
+xfile   pkg1.hello.4 : pkg1.local :                 <name>/msg/foo/hello.h ;
+xfile   pkg1.hello.5 : pkg1.local : <xpath>msg      <name>/msg/foo/hello.h ;
+xfile   pkg1.hello.6 : pkg1.local : <xpath>msg/foo  <name>/msg/foo/hello.h ;
+
+xfile   pkg1.hello.7 : pkg1.local : <xpath>         <name>/msg/foo/hello.h ;
+xfile   pkg1.hello.8 : pkg1.local : <xpath>/        <name>/msg/foo/hello.h ;
+xfile   pkg1.hello.9 : pkg1.local : <xpath>/msg     <name>/msg/foo/hello.h ;
+xfile   pkg1.hello.0 : pkg1.local : <xpath>/msg/foo <name>/msg/foo/hello.h ;
+
+##
+## test autotools buildconf builds with option
+xbuild pkg2         : buildconf-pkg/buildconf : <xbuildconf-arg>pre-conf-arg ;
+xfile  buildconf_args.out : pkg2 ;
+
+##
+## test cast of unknown fileytype - xbuild
+xbuild  pkg3a : [ cast to xconfigure : configure-pkg/genmakefile ] ;
+xdist   pkg3a.dist : pkg3a ;
+xfile   pkg3a.built  : pkg3a : <name>built ;
+
+##
+## test cast of unknown fileytype - xdist
+xdist   pkg3b : [ cast to xconfigure : configure-pkg/genmakefile ] ;
+xfile   pkg3b.inst   : pkg3b : <name>installed ;
+
+##
+## test autotools configure options
+xdist   pkg4 : configure-pkg/configure : <xconfig>free-lunch ;
+xfile   configure_args.out : pkg4 ;
+
+##
+## test unnamed build
+xdist   : configure-pkg/configure ;
+xfile   pkg4.2 : [ xdist : configure-pkg/configure ] : <name>message.out ;
+
+##
+## test build target/option
+xbuild  pkg5 : configure-pkg/configure : <xbuild-arg>all <xbuild-arg>tests ;
+xfile   tests.out : pkg5 ;
+
+##
+## test install target/option
+xdist   pkg6 : configure-pkg/configure : <xdist-arg>install <xdist-arg>extras ;
+xfile   extras.install : pkg6 ;
+
+
+##
+## test lib -- with same-requirements (verifies include-dir dependency as well)
+xdist           pkg7 : configure-pkg/configure ;
+lib             foo7 : pkg7 : <name>lib/!foo <xinclude>include <link>static ;
+compile-fail    src/test.c : : compile7 ;
+run             src/test.c foo7 : : : : run7 ;
+
+##
+## test lib -- ensure that multiple targets can reference the same exports of a xdist
+lib             foo7B : pkg7 : <name>lib/!foo <xinclude>include <link>static ;
+
+
+
+##
+## test lib -- with different-requirements
+xdist           pkg8 : configure-pkg/configure :  <variant>release <link>shared ;
+lib             foo8 : pkg8 : <name>lib/!foo <xinclude>include <variant>debug <link>static ;
+compile-fail    src/test.c : : compile8 ;
+run             src/test.c foo8 : : : : run8 ;
+
+
+##
+## generate configure file -- from buldconf-src (inplace)
+xconfigure      pkg9    : buildconf-pkg9/buildconf  ;
+
+##
+## generate makefile -- from configure-src
+xmakefile       pkg10   : configure-pkg/configure ;
+
+##
+## generate makefile -- from xconfigure target
+xmakefile       pkg11   : pkg9 ;
+
+##
+## build package -- from configure-src
+xbuild          pkg12   : configure-pkg/configure ;
+
+# ##
+# ## build package -- from Makefile (inplace! ???)
+# xbuild          pkg13   : makefile-pkg/Makefile ;
+
+##
+## build package -- from xmakefile target
+xmakefile       pkg14.xmakefile : configure-pkg/configure ;
+xbuild          pkg14           : pkg14.xmakefile ;
+xfile           pkg14.built     : pkg14 : <name>built ;
+
+##
+## install 'local' package -- from configure-src
+xdist           pkg15   : configure-pkg/configure ;
+xfile           pkg15.inst  : pkg15 : <name>installed ;
+
+# ##
+# ## install 'local' package -- from Makefile ( build and install inplace! ???)
+# xdist          pkg16 : makefile-pkg/Makefile ;
+
+##
+## install 'local' package -- from xmakefile target
+xmakefile       pkg17.xmakefile : configure-pkg/configure ;
+xdist           pkg17           : pkg17.xmakefile ;
+xfile           pkg17.inst      : pkg17 : <name>installed ;
+
+##
+## install 'local' package -- from xbuild target
+xbuild          pkg18.xb       : configure-pkg/configure ;
+xfile           pkg18.built     : pkg18.xb : <name>built ;
+xdist           pkg18.loc1      : pkg18.xb ;
+xfile           pkg18.inst      : pkg18.loc1 : <name>installed ;
+
+##
+## multi-install 'local' package -- from xbuild target
+xdist           pkg18.loc2      : pkg18.xb ;
+
+###
+### test exports from xbuild 12
+###
+
+##
+## export file from xbuild as boost.build target
+xfile           file18          : pkg12 : <name>message.out! ;
+
+##
+## export include-dir from xbuild as boost.build target -- multi name syntax
+xinclude        "include" headers : pkg12 ;
+exe             exe19           : src/include-test.c "include" headers ;
+run             exe19           : : : : run19 ;
+
+##
+## export include-dir from xbuild as boost.build target -- <xinclude>syntax
+xinclude        include20       : pkg12 : <name>include <name>headers ;
+exe             exe20           : src/include-test.c include20 ;
+run             exe20           : : : : run20 ;
+
+##
+## test xlib -- directrly from configure file
+xlib            foo22 : configure-pkg/configure : <xpath>lib <name>!foo <xinclude>/include <link>static ;
+run             src/test.c foo22 : : : : run22 ;
+
+##
+## test  lib -- directrly from configure file
+lib             foo22b : configure-pkg/configure : <xpath>lib <name>!foo <xinclude>/include <link>static ;
+run             src/test.c foo22b : : : : run22b ;
+
+##
+## test lib -- directrly from configure file (xdist)
+lib             foo23 : [ xdist : configure-pkg/configure ] : <xpath>lib <name>!foo <xinclude>/include <link>static ;
+run             src/test.c foo23 : : : : run23 ;
+
+##
+## test lib -- directrly from configure file (xbuild)
+lib             foo24 : [ xbuild : configure-pkg/configure ] : <xpath>lib <name>!foo <xinclude>/include <link>static ;
+run             src/test.c foo24 : : : : run24 ;
+
+##
+## test xfile 'no-cast' functionality (fail, because not in include path)
+xfile           message25  : pkg12 : <name>message.out! ;
+compile-fail    src/cast-out.c : <implicit-dependency>message25 : compile25A ;
+compile-fail    src/cast-out.c : <dependency>message25 : compile25B ;
+
+##
+## test xfile 'no-cast' functionality (pass, because manual include path)
+##                                    (also test . and empty path)
+xdist           pkg26       : configure-pkg/configure ;
+xfile           message26   : pkg26 : <name>message.out! <xinclude> ;
+xinclude        inc26       : pkg26 : <name>. ;
+compile         src/cast-out.c  : <implicit-dependency>inc26 : compile26A ;
+compile         src/cast-out.c  : <dependency>message26 : compile26B ;
+
+##
+## test xfile 'cast' functionality (pass, because H files work with implicit-dependency )
+xfile           message27   : pkg18.loc1 : <name>message.out! <xfile-type>H ;
+compile         src/cast-out.c  : <implicit-dependency>message27 : compile27A ;
+compile-fail    src/cast-out.c  : <dependency>message27 : compile27B ;
+
+##
+## test xfile 'cast' functionality (pass, as C file using "C" type directly )
+xfile           message28   : pkg4 : <name>message.out! <xfile-type>C ;
+run             src/cast-c.c message28 : : : : run28 ;
+
+##
+## test xfile 'cast' functionality (pass, as C file using ".c" file suffix syntax )
+xfile           message28b  : pkg4 : <name>message.out! <xfile-type>.c ;
+run             src/cast-c.c message28b : : : : run28b ;
+
+##
+## test xfile with automatic type deduction (pass, because H files work with implicit-dependency )
+xfile           message29  : pkg12 : <name>message.h ;
+compile         src/cast-h.c   : <implicit-dependency>message29 : compile29A ;
+compile-fail    src/cast-h.c   : <dependency>message29 : compile29B ;
+
+##
+## test xfile with automatic type deduction (pass, C file )
+xfile           message30  : pkg12 : <name>message.c ;
+run             src/cast-c.c message30 : : : : run30 ;
+
+##
+## test xfile implicit <name> feature - H
+xfile           message.h  : pkg18.loc2 ;
+compile         src/cast-h.c   : <implicit-dependency>message.h : compile31A ;
+compile-fail    src/cast-h.c   : <dependency>message.h : compile31B ;
+
+##
+## test xfile implicit <name> feature with dir - C
+xfile           msg/hello.c  : pkg4 ;
+run             src/cast-c.c msg/hello.c : : : : run32 ;
+
+
+##
+## test ebeded xfile, directly from configure
+run             src/cast-c.c [ xfile msg/hello.c : configure-pkg/configure ] : : : : run33a ;
+
+##
+## test ebeded xfile, directly from direct xbuild
+run             src/cast-c.c [ xfile msg/hello.c : [ xbuild : configure-pkg/configure ] ] : : : : run33b ;
+
+##
+## test ebeded xfile, directly from configure, and xpath AND postfix from cast
+run             src/cast-c.c [ xfile ignored : configure-pkg/configure : <xpath>msg <name>foo/hello.h <xfile-type>C ] : : : : run33c ;
+
+##
+## test xfile, directly from configure, and xpath
+xfile           message33d : [ xdist : configure-pkg/configure ] : <xpath>msg <name>hello.c ;
+run             src/cast-c.c message33d : : : : run33d ;
+
+##
+## test xfile include path, verify it's from "base"
+xfile           msg/foo/hello.h  : pkg18.loc1 ;
+compile-fail    src/hello-h.c   : <implicit-dependency>msg/foo/hello.h : compile34 ;
+
+##
+## test xfile include path, verify it's from "base" (and can be modified)
+xfile           foo/hello.h  : pkg12 : <xpath>msg ;
+compile         src/hello-h.c   : <implicit-dependency>foo/hello.h : compile35 ;
+
+
+##
+## test xbuild using cmake
+xbuild  pkg36       : cmake-pkg/CMakeLists.txt ;
+xfile   pkg36.built : pkg36 : <name>CMakeFiles/foo.dir/foo.c.o  ;
+lib     pkg36.lib   : pkg36 : <name>foo : : <include>cmake-pkg  ;
+run     src/test.c  pkg36.lib : : : <link>static : run36-static ;
+run     src/test.c  pkg36.lib : : : <link>shared : run36-shared ;
+
+##
+## test xdist using cmake, with full path <name>
+xdist   pkg37       : cmake-pkg/CMakeLists.txt ;
+lib     pkg37.lib   : pkg37 : <name>lib/foo <xinclude>include ;
+run     src/test.c  pkg37.lib : : : <link>static : run37-static ;
+run     src/test.c  pkg37.lib : : : <link>shared : run37-shared ;
+
+
+##
+## test xdist using cmake, with <xpath> and name
+xdist   pkg38       : pkg36 ;
+lib     pkg38.lib   : pkg38 : <name>lib/foo <xinclude>include ;
+run     src/test.c  pkg38.lib : : : <link>static : run38-static ;
+run     src/test.c  pkg38.lib : : : <link>shared : run38-shared ;
+

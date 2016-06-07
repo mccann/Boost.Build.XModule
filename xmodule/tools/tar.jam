@@ -1,0 +1,143 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+import type ;
+import feature ;
+import generators ;
+import "class" : new ;
+import toolset ;
+import xmodule ;
+
+
+type.register XTAR : tar tgz zip ;
+
+feature.feature xtar-arg : : free incidental ;
+
+##################################################################
+##
+##   xtar-repo generator
+##
+##################################################################
+
+# example:
+#     
+#      xtar target : http://foo.com/path/file.tar.bz2 ;
+#
+#
+
+
+class xtar-repo-generator : xmodule-generator
+{
+    import xmodule : construct-workspace ;
+    import xmodule-patch ;
+    import assert ;
+    import "class" ;
+
+    rule generated-targets ( TAR : property-set : project name ? )
+    {
+        local tar-name = [ $(TAR).name ] ;
+       
+        local workspace ;
+        {
+            # create workspace -- by default, mostly invariant
+            workspace = [ construct-workspace $(project)
+                              $(name:E=$(tar-name))
+                            : [ xvariant-ps $(property-set) : : .* ]
+                            : $(TAR) ] ;
+        }
+
+        # get/construct root location
+        local workpath  = [ $(workspace).path ] ;
+        local xroot     = [ $(workspace).xroot XTAR : untar ] ;
+        local tar-ps    = [ $(workspace).refine
+                            [ xvariant-ps $(property-set) 
+                              : xtar-arg 
+                              : .* 
+                          ] ] ; 
+
+        # untar (one-time)
+        local untar-log ;
+        {
+            local untar = [ new non-scanning-action $(TAR) $(xroot)
+                            : xmodule-tar.untar 
+                            : $(tar-ps) ] ;
+
+            untar-log = [ virtual-target.register
+                            [ new xmodule-workspace-file-target 
+                                  log/$(tar-name:BS).untar-log
+                                : : $(workspace) : $(project)
+                                : $(untar) : $(workpath) ] ] ;
+
+        }
+        
+        local patch-targets =   [ xmodule-patch.construct-targets 
+                                    $(xroot)
+                                    $(untar-log) 
+                                    $(property-set) 
+                                    $(project) ] ;
+       
+        # consider git.init!
+
+        return  [ property-set.empty ] 
+                [ virtual-target.register
+                    [ new xmodule-xmodule-final-target $(xroot) 
+                        : $(untar-log) $(patch-targets)
+                        : XREPO : $(project) ] ] ;
+    }
+
+}
+
+generators.register [ new xtar-repo-generator 
+                              xmodule-tar.untar 
+                            : XTAR : XREPO ] ;
+
+
+
+toolset.flags   $(__name__).untar OPTIONS : <xtar-arg> ;
+
+
+.CWD  = [ PWD ] ;
+XLOG = [ xmodule.logfile-action : ": cleanup " cleanup_dirs ] ;
+
+actions untar
+{
+    $(XLOG[1])="$(<[1])" 
+
+    cleanup_dirs () {
+        : remove new temporary
+        rm -rf "$(>[2]).new-tmp-dir"
+
+        : remove old temporary
+        rm -rf "$(>[2]).old-tmp-dir"
+
+    }
+
+    {
+        cleanup_dirs
+
+        : make new temporary destination
+        mkdir "$(>[2]).new-tmp-dir" && (
+
+            : change to it
+            cd "$(>[2]).new-tmp-dir"
+        
+            : untar to it
+            tar -x -f "$(>[1]:R=$(.CWD))" $(OPTIONS)
+        ) && {
+
+            : "move current to old  (if exists)"
+            mv "$(>[2])" "$(>[2]).old-tmp-dir" 2>/dev/null 
+
+            : move new to current
+            mv "$(>[2]).new-tmp-dir" "$(>[2])"
+
+        } && {
+
+            cleanup_dirs
+        }
+
+    } $(XLOG[2])
+
+ }

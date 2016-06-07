@@ -1,0 +1,133 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+# trim 'left' of white space
+import string ;
+
+# apparently some jam platforms don't support escape codes!?
+# use char from string module instead
+.ws = [ string.whitespace ] ;
+
+.trim-left-regex  = ^[$(.ws)]*([^$(.ws)]*.*)$ ;
+.trim-right-regex = ^(|.*[^$(.ws)])[$(.ws)]*$ ;
+.trim-regex       = ^[$(.ws)]*(|.*[^$(.ws)])[$(.ws)]*$ ;
+
+rule trim-left-regex ( )
+{
+    return $(.trim-left-regex) ;
+}
+
+rule trim-right-regex ( )
+{
+    return $(.trim-right-regex) ;
+}
+
+rule trim-regex ( )
+{
+    return $(.trim-regex) ;
+}
+
+rule left ( strs * )
+{
+    return [ MATCH  $(.trim-left-regex) : $(strs) ] ;
+}
+
+# trim 'right' of white space
+rule right ( strs * )
+{
+    return [ MATCH  $(.trim-right-regex) : $(strs) ] ;
+}
+
+# trim left and right white space of a string
+rule trim ( strs * )
+{
+    return [ MATCH  $(.trim-regex) : $(strs) ] ;
+}
+
+# run shell command and trim it
+rule sh ( command : shell-control-args * ) {
+    return [ trim [ SHELL $(command) : strip-eol
+                        : $(2) : $(3) : $(4)
+                        : $(5) : $(6) : $(7) ] ] ;
+}
+
+# run with --debug to test modules
+rule __test__ {
+
+    import assert ;
+    import string ;
+
+    # apparently some platforms don't support escape characters.
+    # use string module's whitespace-chars method for those
+    # -- put in runs for extra testing
+    local ws ;
+    for local c in [ string.whitespace-chars ] {
+        ws += $(c) $(c) ;
+    }
+    # join with extra space
+    ws = $(ws:J=" ") ;
+
+    test.1  = "$(ws)foo$(ws)foo" ;
+    test.2  = "bar$(ws)bar$(ws)" ;
+    test.3  = "$(ws)baz$(ws)baz$(ws)" ;
+    test.4  = "qux$(ws)qux"  ;
+    test.5  = "$(ws)"  ;
+    test.6  = ""  ;
+    test.7  = ;  # (null case!)
+    test.8  = "foo" "$(ws)bar$(ws)" "$(ws)" "$(ws)baz" "qux$(ws)" ;
+    test.9  = "$(ws)foo" ;
+    test.10 = "foo$(ws)" ;
+    test.11 = "$(ws)foo$(ws)" ;
+
+    left.1 = "foo$(ws)foo" ;
+    left.2 = "bar$(ws)bar$(ws)" ;
+    left.3 = "baz$(ws)baz$(ws)" ;
+    left.4 = "qux$(ws)qux" ;
+    left.5 = "" ;
+    left.6 = "" ;
+    left.7 = ;
+    left.8 = "foo" "bar$(ws)" "" "baz" "qux$(ws)" ;
+    left.9  = "foo" ;
+    left.10 = "foo$(ws)" ;
+    left.11 = "foo$(ws)" ;
+
+    right.1 = "$(ws)foo$(ws)foo" ;
+    right.2 = "bar$(ws)bar" ;
+    right.3 = "$(ws)baz$(ws)baz" ;
+    right.4 = "qux$(ws)qux" ;
+    right.5 = "" ;
+    right.6 = "" ;
+    right.7 = ;
+    right.8 = "foo" "$(ws)bar" "" "$(ws)baz" "qux" ;
+    right.9  = "$(ws)foo" ;
+    right.10 = "foo" ;
+    right.11 = "$(ws)foo" ;
+
+    trim.1 = "foo$(ws)foo" ;
+    trim.2 = "bar$(ws)bar" ;
+    trim.3 = "baz$(ws)baz" ;
+    trim.4 = "qux$(ws)qux" ;
+    trim.5 = "" ;
+    trim.6 = "" ;
+    trim.7 = ;
+    trim.8 = "foo" "bar" "" "baz" "qux" ;
+    trim.9  = "foo" ;
+    trim.10 = "foo" ;
+    trim.11 = "foo" ;
+
+    for local i in 1 2 3 4 5 6 7 8 9 10 11 {
+        assert.result $(left.$(i))  : left  $(test.$(i)) ;
+        assert.result $(right.$(i)) : right $(test.$(i)) ;
+        assert.result $(trim.$(i))  : trim  $(test.$(i)) ;
+    }
+
+    assert.result [ modules.peek trim : .trim-left-regex  ] : trim-left-regex ;
+    assert.result [ modules.peek trim : .trim-right-regex ] : trim-right-regex ;
+    assert.result [ modules.peek trim : .trim-regex       ] : trim-regex ;
+
+#     assert.result "" : SHELL "non-existant-command" ;
+#     assert.result "" : sh "non-existant-command" ;
+
+}

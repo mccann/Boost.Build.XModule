@@ -1,0 +1,133 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+import type ;
+import "class" : new ;
+import feature ;
+import property-set ;
+import sequence ;
+import path ;
+import xmodule ;
+import virtual-target ;
+import set ;
+import indirect ;
+import errors ;
+
+feature.feature xpatch  : : dependency free incidental ;  
+feature.feature xaction : : incidental free ;
+
+type.register XPATCH  ;
+type.register XACTION ;
+
+rule construct-patch ( workspace xroot dep-target project property-set patch-file )
+{
+    local name = [ $(patch-file).name ] ;
+    return  [ virtual-target.register 
+                [ new xmodule-workspace-file-target
+                      log/$(name).patch-log
+                    : XPATCH
+                    : $(workspace) : $(project)
+                    : [ new non-scanning-action 
+                            $(patch-file)
+                            $(xroot)
+                            $(dep-target)
+                        : $(__name__).patch 
+                        : $(property-set) ]
+                    : [ $(workspace).path ]
+            ]   ] ;
+}
+
+XLOG = [ xmodule.logfile-action ] ;
+
+actions patch
+{
+    $(XLOG[1])="$(<[1])"
+    {
+        # Error & logging
+        set -e -x 
+        : "patch files"
+        patch -p1 <"$(>[1])" -d "$(>[2])" 
+
+    } $(XLOG[2]) 
+}
+
+
+rule construct-action ( workspace xroot dep-target project filtered-ps action )
+{
+    local name = [ MATCH ^[@](.*[%].*)[.](.*)$ : $(action) ] ;
+    if ! $(name) {
+        errors.user-error "<xaction>$(action) missing leading @" ;
+    }
+    # add hash to name to prevent collisions from other modules
+    name = [ xmodule.truncate-str [ MD5 $(name[1]) ] ] $(name[2]) ;
+    name = module-$(name:J=.) ;
+
+    local property-set = [ $(filtered-ps).add-raw 
+                            <dependency>$(dep-target) 
+                            <xaction>$(action)
+                         ] ;
+
+    return  [ virtual-target.register 
+                [ new xmodule-workspace-file-target
+                      log/$(name).log
+                    : XACTION
+                    : $(workspace) : $(project)
+                    : [ new non-scanning-action 
+                            $(xroot)
+                        : $(__name__).xaction 
+                        : $(property-set) ]
+                    : [ $(workspace).path ]
+            ]   ] ;
+}
+
+rule xaction ( targets * : sources * : properties * )
+{
+    indirect.call [ MATCH ^<xaction>[@](.*)$ : $(properties) ] 
+                $(targets) : $(sources) : $(properties) ;
+       
+}
+
+rule construct-targets ( xroot dep-target property-set project )
+{
+    local result = ;
+    local xpatches = [ $(property-set).get <xpatch> ] ;
+    local xactions = [ $(property-set).get <xaction> ] ;
+    if $(xpatches) || $(xactions) {
+        local workspace = [ $(xroot).workspace ] ;
+        local ps = [ $(workspace).properties ] ;
+
+        if $(xpatches) {
+            result +=   [ sequence.transform 
+                            construct-patch
+                            $(workspace)
+                            $(xroot)
+                            $(dep-target)
+                            $(project)
+                            $(ps)
+                        :   $(xpatches)
+                        ] ;
+        }
+
+        if $(xactions) {
+            # filter xactions out
+            local filtered-ps = 
+                [ property-set.create 
+                    [ set.difference [ $(ps).raw ] 
+                        : <xaction>$(xactions) ] ] ; 
+            
+            result +=   [ sequence.transform 
+                            construct-action
+                            $(workspace)
+                            $(xroot)
+                            $(dep-target)
+                            $(project)
+                            $(ps)
+                        :   $(xactions)
+                        ] ;
+        }
+    }
+
+    return $(result) ;
+}
+

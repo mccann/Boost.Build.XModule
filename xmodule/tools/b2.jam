@@ -1,0 +1,337 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+##################################################################
+##   build external bjam/b2 projects
+##  
+##   distinction between 'xbuild' and 'xdist' for b2 projects is fuzzy
+#      - all actual work is done in 'build' phase 
+#      - will output files into 'xbuild' and 'xdist' destinations
+#        in that one step 
+##################################################################
+
+
+# <xbuild-arg>          * passed to 'b2' plainly. Typically a build target
+#                         - can be specified multiple times 
+#
+# <xbuild-jobs>         * passed to 'b2' as the -j flag
+#                         defaults to:
+#                           one less than the min value of:
+#                           - current b2/bjam '-j' value
+#                           - number of host cores
+#
+# <xb2-build-dir-arg>   * passed to 'b2' as prefix to absolute-path to 
+#                           XBUILD location
+#
+# <xb2-dist-arg>        * passed to 'b2' as prefix to absolute-path to 
+#                           XDIST location
+#                         - useful with '--prefix=' and '--stagedir='
+#               
+# <xb2-booststrap>      * script to execute to bootstrap xb2-build/xbuild 
+#                         - pass to xbuild target
+#
+# <xb2-bootstrap-arg>   * argument(s) to bootstrap script
+#
+# <xb2-bootstrap-build-dir-arg>
+#                        * passed to bootstrap as prefix to absolute-path to 
+#                           XDIST location
+# <xb2-bootstrap-dist-arg> 
+#                        * passed to bootstrap as prefix to absolute-path to 
+#                           XBUILD location
+#                         - useful with '--prefix=' and '--stagedir='
+#
+# <xdist-arg>           * ignored, do all work with <xbuild-arg>
+#
+# <xdist-jobs>          * ignored, used <xbuild-jobs>
+#
+# <xdist-location>      * TODO: document
+#
+
+import type ;
+import feature : feature ;
+import "class" : new ;
+import generators ;
+import toolset ;
+import build-jobs-arg ;
+import path ;
+import xmodule ;
+import indirect ;
+import property-set ;
+
+# register 'Jamroot' XJAMROOT type
+type.register XJAMROOT       ;
+type.register XUSER_JAMFILE  :  
+type.register XJAMFILE       : jam ;
+
+
+# xb2 versions of XBUILD/XDIST
+type.register XB2_BUILD  : : XBUILD   ; 
+type.register XB2_DIST   : : XDIST    ; 
+
+#TODO: document these
+feature xb2-bootstrap           : : free dependency incidental ;
+feature xb2-bootstrap-arg       : : free incidental ; 
+feature xb2-bootstrap-build-dir-arg  : : free incidental ; 
+feature xb2-bootstrap-dist-arg  : : free incidental ; 
+feature xb2-toolset-options     : : free incidental ;
+feature xb2-build-dir-arg       : : free incidental ;
+feature xb2-dist-arg            : : free incidental ;
+
+# register filenames associated with XJAMROOT
+xmodule.register-filenames Jamroot Jamroot.jam : XJAMROOT ;
+
+# register filenames associated with XUSER_JAMFILE
+xmodule.register-filenames Jamfile Jamfile.jam : XUSER_JAMFILE ;
+
+
+##################################################################
+##
+##   xb2-build-generator  --  generator, flags, actions
+##
+##################################################################
+
+class xb2-build-generator : xmodule-generator
+{
+    import xmodule : refine-source-file-hash-dependencies
+                     construct-workspace
+                   ;
+    import xmodule-patch ;
+
+    rule generated-targets ( XJAMROOT : property-set : project name ? )
+    {
+
+        property-set = [ refine-source-file-hash-dependencies
+                        $(property-set) $(project) $(name) : $(XJAMROOT) ] ;
+
+        # create workspace -- by default, highly variant
+        local workspace = [ construct-workspace $(project) $(name)
+                              : [ xvariant-ps $(property-set) ] 
+                              : $(XJAMROOT) ] ;
+
+        local build-ps =    [ $(workspace).refine 
+                              [ xvariant-ps $(property-set) 
+                                : xb2-.*
+                                  xbuild-.*
+                                  xtoolset-.*
+                                : .* 
+                              ] 
+                            ] ;
+
+        # get/construct root locations
+        local bld-root  = [ $(workspace).xroot XBUILD : build ] ;
+        local dst-root  = [ $(workspace).xroot XDIST  : local ] ;
+        
+        local b2-bootstrap-ref ;
+        local b2-bootstrap-file ;
+        local b2-bootstrap-log ;
+        local b2-config ;
+        local build-log ;
+        local patch-targets ;
+        if $(bld-root) && $(dst-root) {
+
+
+            bootstrap-ref = [ $(property-set).get <xb2-bootstrap> ] ;
+
+            if $(bootstrap-ref) {
+                bootstrap-file = [ generators.construct $(project) $(name)
+                                    : XFILE : $(property-set)
+                                    : $(bootstrap-ref) : top-source ] ;
+
+                if ! $(bootstrap-file[2]) {
+                    generator-error 
+                        "Could not resolve <xb2-bootstrap> into file"
+                      : $(project) : $(bootstrap-ref) : $(name) ;
+                }
+                b2-bootstrap-log = 
+                    [ virtual-target.register
+                        [ new xmodule-workspace-file-target 
+                              log/b2-bootstrap.log
+                            : : $(workspace) : $(project)
+                            : [ new non-scanning-action 
+                                  $(bootstrap-file[2]) $(XJAMROOT)
+                                  $(bld-root) $(dst-root) 
+                                : xmodule-b2.bootstrap
+                                : $(build-ps) ] 
+                            : [ $(workspace).path ] ] ] ;
+            }
+
+
+            b2-config = [ virtual-target.register
+                            [ new xmodule-workspace-file-target 
+                                  b2/toolset-config.jam
+                                : XJAMFILE : $(workspace) : $(project)
+                                : [ new non-scanning-action 
+                                      $(XJAMROOT) $(b2-bootstrap-log)
+                                    : xmodule-b2.configure-toolset
+                                    : $(build-ps) ] 
+                                : [ $(workspace).path ] ] ] ;
+
+
+            build-log = [ virtual-target.register
+                            [ new xmodule-workspace-file-target 
+                                  log/b2-build.log
+                                : : $(workspace) : $(project)
+                                : [ new non-scanning-action 
+                                      $(XJAMROOT) $(bld-root) $(dst-root)
+                                      $(b2-config)
+                                    : xmodule-b2.build
+                                    : $(build-ps) ] 
+                                : [ $(workspace).path ] ] ] ;
+
+            patch-targets = [ xmodule-patch.construct-targets 
+                                $(bld-root)
+                                $(build-log) 
+                                $(property-set) 
+                                $(project) ] ;
+
+            return  [ property-set.empty ] 
+                    [ virtual-target.register
+                        [ new xmodule-xmodule-final-target 
+                              $(bld-root) 
+                            : $(XJAMROOT) $(b2-config) 
+                              $(build-log) $(patch-targets)
+                            : XB2_BUILD : $(project) ] ] ;
+        }
+    }
+}
+
+toolset.flags   $(__name__)           B2_SELF       : [ modules.peek : self ]  ;
+toolset.flags   $(__name__).bootstrap OPTIONS       : <xb2-bootstrap-arg>      ;
+toolset.flags   $(__name__).bootstrap DIST_OPTIONS  : <xb2-bootstrap-dist-arg> ;
+toolset.flags   $(__name__).bootstrap BLD_OPTIONS   : 
+                                      <xb2-bootstrap-build-dir-arg> 
+                                                    ;
+
+.CWD = [ PWD ] ;
+
+XLOG = [ xmodule.logfile-action  ] ;
+
+actions bootstrap
+{
+    $(XLOG[1])="$(<[1])"
+    (
+        set -e -x
+        : b2 bootstrap action
+        cd "$(>[2]:D)"
+        ./"$(>[1]:D=)"  --with-bjam=$(B2_SELF)              \
+                        $(BLD_OPTIONS)"$(>[3]:R=$(.CWD))"   \
+                        $(DIST_OPTIONS)"$(>[4]:R=$(.CWD))"  \
+                        $(OPTIONS)
+    ) $(XLOG[2])
+}
+
+toolset.flags  $(__name__).configure-toolset OPTIONS : <xb2-toolset-options> ;
+
+rule configure-toolset ( targets * :  sources * : properties * )
+{
+    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
+}
+
+actions configure-toolset
+{
+    set -e
+    if [ -n "$(XTOOLSET_TOOLSET)" ] ; then 
+        cat > '$(<[1])' <<SET_TOOLSET_JAM
+        
+# Configure: <toolset>$(XTOOLSET_TOOLSET) 
+#            <toolset-$(XTOOLSET_TOOLSET):version>$(XTOOLSET_VERSION)
+using $(XTOOLSET_TOOLSET) : $(XTOOLSET_VERSION:E=) 
+    : $(XTOOLSET_CXX:J= )
+    : <archiver>"$(XTOOLSET_AR)" 
+      <ranlib>"$(XTOOLSET_RANLIB)"
+      <cflags>"$(XTOOLSET_CFLAGS)"
+      <cxxflags>"$(XTOOLSET_CXXFLAGS)"
+      <linkflags>"$(XTOOLSET_LINKFLAGS)"
+      $(OPTIONS)
+    ;
+SET_TOOLSET_JAM
+
+    else
+        cat > '$(<[1])' <<SET_TOOLSET_JAM
+# Toolset configuration was forfeit with <xtoolset-forfeit> 
+SET_TOOLSET_JAM
+    fi
+}
+
+
+generators.register [ new xb2-build-generator xmodule-b2.jamroot-build
+                          : XJAMROOT : XB2_BUILD ] ;
+
+generators.register [ new xb2-build-generator xmodule-b2.jamroot-xbuild
+                          : XJAMROOT : XBUILD ] ;
+
+generators.register [ new xb2-build-generator xmodule-b2.jamfile-build
+                          : XUSER_JAMFILE : XB2_BUILD ] ;
+
+generators.register [ new xb2-build-generator xmodule-b2.jamfile-xbuild
+                          : XUSER_JAMFILE : XBUILD ] ;
+
+toolset.flags   $(__name__).build TARGETS           : <xbuild-arg>             ;
+toolset.flags   $(__name__).build BUILD_DIR_ARGS    : <xb2-build-dir-arg>      ;
+toolset.flags   $(__name__).build DIST_PATH_ARGS    : <xb2-dist-arg>           ;
+toolset.flags   $(__name__).build NUM_JOBS          : <xbuild-jobs>            ;
+toolset.flags   $(__name__).build JAM_SEMAPHORE     : XMODULE-BUILD-SEMAPHORE  ;
+
+toolset.flags   $(__name__).build DEFAULT_NUM_JOBS  : 
+                                    [ build-jobs-arg.external-build-jobs-arg ]
+                                                    ;
+
+
+actions build
+{
+    $(XLOG[1])="$(<[1])"
+    (
+        set -e 
+        : b2 build action
+        cd "$(>[1]:D)"
+        echo 'build && install'
+        set -x
+        $(B2_SELF) --user-config="$(>[4]:R=$(.CWD))"                    \
+                   -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS))                  \
+                   $(BUILD_DIR_ARGS:E=--build-dir=)"$(>[2]:R=$(.CWD))"  \
+                   $(DIST_PATH_ARGS)"$(>[3]:R=$(.CWD))"                 \
+                   "$(TARGETS)"
+
+    ) $(XLOG[2])
+}
+
+##################################################################
+##
+##   xb2-dist-generator -- generator
+##
+##################################################################
+
+
+class xb2-dist-generator : xmodule-generator
+{
+    import xmodule-patch ;
+    import assert ;
+
+    rule generated-targets ( XB2_BUILD : property-set : project name ? )
+    {
+        local workspace = [ $(XB2_BUILD).workspace ] ;
+
+        local patch-targets = [ xmodule-patch.construct-targets 
+                                [ $(workspace).xroot XDIST ]
+                                $(XB2_BUILD)
+                                $(property-set) 
+                                $(project) ] ;
+
+
+        return  [ property-set.empty ] 
+                [ virtual-target.register
+                    [ new xmodule-xmodule-final-target 
+                          [ $(workspace).xroot XDIST ] 
+                        : $(XB2_BUILD) $(patch-targets)
+                        : XB2_DIST : $(project) ] ] ;
+    }
+}
+
+
+generators.register [ new xb2-dist-generator xmodule-b2.dist
+                          : XB2_BUILD : XB2_DIST ] ;
+
+generators.register [ new xb2-dist-generator xmodule-b2.xdist
+                          : XB2_BUILD : XDIST ] ;

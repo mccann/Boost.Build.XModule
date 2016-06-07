@@ -1,0 +1,278 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+#### these docs are out of date
+#### TODO: update
+
+
+## This module defines the 'xm' External Module build system
+#
+#
+# Example use:
+# --------------------------------------------------------------------------------------------------------------------------------
+#
+# import xm ;
+#
+# xmodule foo.xm  : foo/configure
+#                 : <link>static:<xm-flag>--enable-static
+#                   <link>shared:<xm-flag>--enable-shared
+#                   <xm-flag>CXXFLAGS=\"-Wno-unused-local-typedefs -Wno-deprecated -Wno-return-type\"
+#                 ;
+#
+#
+# lib foo : : <xm>foo/configure
+#             <xpath>lib
+#         : :
+#             <xinclude>include
+#         ;
+#
+#
+#
+# --------------------------------------------------------------------------------------------------------------------------------
+#
+## todo: review/fix these docs
+#
+# xmodule arguments:
+#
+#       source          * path to standard build source
+#                           - can be a bootstrap source such as: modulepath/bootstrap, modulepath/buildconf, or modulepath/autogen.sh
+#                           - can be a configuration file such as: modulepath/configure, modulepath/CMakeLists.txt
+#                           - inference patterns are maintained in xmodule-*.jam files
+#                           - if a module uses non-standard/unsupported build setup, the Non-Standard Build Features can be used instead of a source
+#
+# xmodule properties:
+#
+#       <xm-config>    * options for building the module, exact form of options depends on the module's <xm-conf-tool> (typically infered)
+#
+# xmodule lib properties:
+#
+#       <xpath>         * path to directory in installation where target is to be found
+#
+#       <xinclude>      * Make dependent targets find headers in the given path
+#
+#
+#
+
+
+# Features:
+#
+# <xm-make-jflag>                 * passed to make as the -j flag.
+#                                   --  if unspecified, will default to one less than the min value of:
+#                                      - '-j' value that boost.build was involked with
+#                                      - number of local cores
+#
+# <xm-install-target>            * name of install target
+#                                   -- if unspecified, will default to 'install'
+#
+# <xm-build-target>              * name of build target
+#                                   -- can be specified multiple times for multiple targets
+#                                   -- if unspecified, will pass make nothing, which typically causes the default make target to build
+
+
+
+import "class" : new ;
+import generators ;
+import property ;
+import property-set ;
+import sequence ;
+import type ;
+import path ;
+import virtual-target ;
+import feature ;
+import string ;
+import errors ;
+import assert ;
+import toolset ;
+
+
+if $(__name__) != xmodule {
+    errors.error "xmodule toolset needs to be loaded into 'xmodule' module" ;
+}
+
+
+## load sibling jam modules which may not be loaded yet
+{
+    for local sibling in [ path.glob $(__file__:D) : *.jam : xmodule.jam ] {
+        modules.load $(sibling:B) : $(sibling) ;
+    }
+}
+
+
+## include xmodule core files
+{
+    local files  =  feature
+                    url 
+                    type
+                    class
+                    virtual-targets
+                    generator
+                    srchash
+                    workspace
+                    export-name
+                    export-generator
+                    url-generator
+                    xroot
+                    xpath
+                    xrsrc
+                    xfile
+                    xlib
+                    xinclude
+                    targets
+                    project
+                    rules
+                    xtoolset
+                ;
+
+    for local file in $(files) {
+        include $(__file__:D)/xmodule/core/$(file).jam ;
+    }
+}
+
+    
+## import tools
+{
+    # load tool
+    local rule import-tool ( tools )
+    {
+        modules.load xmodule-$(tool) : $(__file__:D)/xmodule/tools/$(tool).jam ;
+    }
+
+    for local tool in patch make cmake configure git dpkg curl tar b2 {
+        import-tool $(tool) ;
+    }
+}
+
+
+## register generators
+register-xpath-generators  ;
+register-xrsrc-generators  ;
+
+
+register-export-generators xfile      XFILE    ;
+register-export-generators xlib       LIB      : * : builtin.lib-generator ;
+register-export-generators xlib       XLIB     : * : builtin.lib-generator ;
+register-export-generators xinclude   XINCLUDE ;
+
+
+# must be a complete list of all non-xfile types
+# could be more 'register' based..
+register-xfile-passthrough-generator !XPATH+ !XRSRC+ !XCURL_URL+ : XFILE ;
+
+
+## tests - activate with "--debug"
+
+rule __test__ ( )
+{
+    import assert ;
+    import property-set ;
+
+    local xmodule-tests = [ MATCH ^(__test__.+)$ : [ RULENAMES xmodule ] ] ;
+    # run __test__* rules
+    echo found tests in xmodule: "\n\t$(xmodule-tests)"  ; 
+    for local test in $(xmodule-tests) {
+        echo running $(test) ... ;
+        $(test) ;
+    }
+
+    # test name decoding regex
+    assert.result ""  foo.txt  ""  : decode-name  foo.txt       ;
+    assert.result ""  foo.txt  "!" : decode-name  foo.txt!      ;
+    assert.result "!" foo.txt  "!" : decode-name !foo.txt!      ;
+    assert.result "!" foo!.txt "!" : decode-name !foo!.txt!     ;
+    assert.result "!" foo!.txt ""  : decode-name !foo!.txt      ;
+    assert.result ""  foo!.txt "!" : decode-name  foo!.txt!     ;
+    assert.result ""  foo!.txt ""  : decode-name  foo!.txt      ;
+
+    assert.result "" foo "" "#4.7.1" 4.7.1 : decode-name foo#4.7.1 ;
+    assert.result "" foo "" "#4.7.1" 4.7.1 : decode-name foo#4.7.1 ;
+
+
+    # test name decoding routine with 'version' for non-shared object
+    
+    local st-ps = [ property-set.create <link>static ] ;
+    st-ps = [ $(st-ps).add-defaults ] ;
+    local sh-ps = [ property-set.create <link>shared ] ;
+    sh-ps = [ $(sh-ps).add-defaults ] ;
+
+    
+    local ex  = .so ;
+    local vex = .so.3.0 ;
+    if [ modules.peek : OS ] = MACOSX {
+        ex = .dylib ;
+        vex = .3.0.dylib ;
+    }
+
+    local f = add-prefix-and-suffix ;
+
+    assert.result foo       : $(f)  foo   :            : $(st-ps) mutable ;
+    assert.result foo       : $(f)  foo   :            : $(sh-ps) mutable ;
+    assert.result foo       : $(f)  foo   : LIB        : $(st-ps) mutable ;
+    assert.result foo       : $(f)  foo   : LIB        : $(sh-ps) mutable ;
+    assert.result foo.a     : $(f) !foo   : STATIC_LIB : $(st-ps) mutable ;
+    assert.result foo.a     : $(f) !foo   : STATIC_LIB : $(sh-ps) mutable ;
+    assert.result foo       : $(f) !foo!  : STATIC_LIB : $(st-ps) mutable ;
+    assert.result foo       : $(f) !foo!  : STATIC_LIB : $(sh-ps) mutable ;
+    assert.result libfoo.a  : $(f)  foo   : STATIC_LIB : $(st-ps) mutable ;
+    assert.result libfoo.a  : $(f)  foo   : STATIC_LIB : $(sh-ps) mutable ;
+    assert.result foo       : $(f)  foo   : STATIC_LIB : $(st-ps) immutable ;
+    assert.result foo       : $(f)  foo   : STATIC_LIB : $(sh-ps) immutable ;
+    assert.result foo$(ex)  : $(f) !foo   : SHARED_LIB : $(st-ps) mutable ;
+    assert.result foo$(ex)  : $(f) !foo   : SHARED_LIB : $(sh-ps) mutable ;
+    assert.result foo       : $(f)  foo   : SHARED_LIB : $(st-ps) immutable ;
+    assert.result foo       : $(f)  foo   : SHARED_LIB : $(sh-ps) immutable ;
+
+    # now with version
+    assert.result foo       : $(f)  foo#3.0   :            : $(st-ps) mutable ;
+    assert.result foo       : $(f)  foo#3.0   :            : $(sh-ps) mutable ;
+    assert.result foo       : $(f)  foo#3.0   : LIB        : $(st-ps) mutable ;
+    assert.result foo       : $(f)  foo#3.0   : LIB        : $(sh-ps) mutable ;
+    assert.result foo.a     : $(f) !foo#3.0   : STATIC_LIB : $(st-ps) mutable ;
+    assert.result foo.a     : $(f) !foo#3.0   : STATIC_LIB : $(sh-ps) mutable ;
+    assert.result foo       : $(f) !foo!#3.0  : STATIC_LIB : $(st-ps) mutable ;
+    assert.result foo       : $(f) !foo!#3.0  : STATIC_LIB : $(sh-ps) mutable ;
+    assert.result libfoo.a  : $(f)  foo#3.0   : STATIC_LIB : $(st-ps) mutable ;
+    assert.result libfoo.a  : $(f)  foo#3.0   : STATIC_LIB : $(sh-ps) mutable ;
+    assert.result foo       : $(f)  foo#3.0   : STATIC_LIB : $(st-ps) immutable ;
+    assert.result foo       : $(f)  foo#3.0   : STATIC_LIB : $(sh-ps) immutable ;
+    assert.result foo$(vex) : $(f) !foo#3.0   : SHARED_LIB : $(st-ps) mutable ;
+    assert.result foo$(vex) : $(f) !foo#3.0   : SHARED_LIB : $(sh-ps) mutable ;
+    assert.result foo       : $(f)  foo#3.0   : SHARED_LIB : $(st-ps) immutable ;
+    assert.result foo       : $(f)  foo#3.0   : SHARED_LIB : $(sh-ps) immutable ;
+
+  
+    # test match-type decoding regex
+    assert.result ""  RULE ""   : match-type-decode  RULE  ;
+    assert.result "!" RULE ""   : match-type-decode !RULE  ;
+    assert.result ""  RULE "+"  : match-type-decode  RULE+ ;
+    assert.result "!" RULE "+"  : match-type-decode !RULE+ ;
+    assert.result               : match-type-decode !+  ;
+    assert.result               : match-type-decode "!"  ;
+    assert.result               : match-type-decode !RULE!     ;
+    assert.result "!" "R ULE" "+" : match-type-decode "!R ULE+"  ;
+    assert.result "" "R ULE" ""   : match-type-decode "R ULE"  ;
+    assert.result                 : match-type-decode "+"  ;
+
+
+    ### test type.type overload and register-filenames
+    import type ;
+
+    type.register TESTFILETYPE ;
+
+    register-filenames xm-test-file xm-test.txt : TESTFILETYPE ;
+
+    import assert ;
+
+    assert.result CPP           : type.type file.cpp ;
+    assert.result CPP           : type.type path/file.cpp ;
+
+    assert.result TESTFILETYPE  : type.type xm-test-file ;
+    assert.result TESTFILETYPE  : type.type xm-test.txt ;
+
+    assert.result TESTFILETYPE  : type.type path/to/xm-test-file ;
+    assert.result TESTFILETYPE  : type.type path/to/xm-test.txt ;
+
+    assert.result               : type.type unknown-file ;
+
+}

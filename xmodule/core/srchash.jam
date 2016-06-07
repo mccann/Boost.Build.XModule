@@ -1,0 +1,45 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+
+##################################################################
+##
+##   SRC_HASH utility
+##
+##################################################################
+
+# be sure to depend on src-hash (maybe 'scanner' could be setup instead??
+# TODO: investigate that )
+
+# ensures that EACH given source has it's own 'src-hash' dependency
+rule refine-source-file-hash-dependencies ( property-set project name
+                                          : sources + )
+{
+
+    # gen hash-targets from given source
+    local rule gen-hash-targets ( source ) {
+        local result ;
+        if ! [ $(source).action ] {
+            local r = [ generators.construct $(project) $(name)
+                        : XSRCHASH : $(property-set) : $(source) ]
+                        ;
+            if ! $(r) {
+                import errors ;
+                errors.error "could not construct XSRCHASH from source!" ;
+            } else {
+                result += $(r[2-]) ;
+            }
+        }
+        return $(result) ;
+    }
+
+    local hash-targets = [ sequence.transform gen-hash-targets : $(sources) ] ;
+    if $(hash-targets) {
+        return [ $(property-set).add-raw <dependency>$(hash-targets) ] ;
+    } else {
+        return $(property-set) ;
+    }
+}
+

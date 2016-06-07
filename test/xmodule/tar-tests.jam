@@ -1,0 +1,75 @@
+# tar-tests
+
+path-constant TAR_TEST_CUR : . ;
+
+rule make-src-archive ( format : git-format ? : pipe-cmd ? ) 
+{
+    git-format ?= $(format) ;
+
+    if ! [ CHECK_IF_FILE $(TAR_TEST_CUR)/bin/tar-test/src.$(format) ] {
+        local cmd ;
+
+        cmd += "set -e" ;
+        cmd += "cd '$(TAR_TEST_CUR)'" ;
+        cmd += "mkdir -p bin/tar-test" ;
+        cmd += "git archive --format=$(git-format) HEAD src $(pipe-cmd:E=) > bin/tar-test/src.$(format)" ;
+        
+        SHELL $(cmd:J="\n") ;
+    }
+}
+
+# make tar file for tests
+make-src-archive tar ;
+make-src-archive tar.gz ;
+make-src-archive tar.bz2 : tar : "| bzip2" ;
+make-src-archive zip ;
+make-src-archive tgz ;
+
+
+# test tar as source
+xrepo tar-1 : bin/tar-test/src.tar ;
+xrepo tar-2 : bin/tar-test/src.tar.gz ;
+xrepo tar-3 : bin/tar-test/src.tar.bz2 ;
+xrepo tar-4 : bin/tar-test/src.zip ;
+xrepo tar-5 : bin/tar-test/src.tgz ;
+
+# curl & tar test
+xrepo tar-6 : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar ;
+xrepo tar-7 : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.gz ;
+xrepo tar-8 : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 ;
+xrepo tar-9 : file://$(TAR_TEST_CUR)/bin/tar-test/src.zip ;
+xrepo tar-A : file://$(TAR_TEST_CUR)/bin/tar-test/src.tgz ;
+
+
+# get a file from archive and compile it
+xfile tar-B : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 
+            : <name>src/hello-world.c
+            ;
+run   tar-B : : : : run-tar-B ;
+
+
+# tar-B inline
+run   [ xfile src/hello-world.c : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 ] 
+      : : : : run-tar-B-inline ;
+
+
+# like tar-B, but with cast
+xfile tar-C : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 
+            : <name>src/hello-world.h
+              <xfile-type>.c
+            ;
+            
+run   tar-C : : : : run-tar-C ;
+
+# tar-C inline
+run   [ xfile src/hello-world.h 
+        : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 
+        : <xfile-type>.c
+      ] 
+      : : : : run-tar-C-inline ;
+
+
+
+
+
+

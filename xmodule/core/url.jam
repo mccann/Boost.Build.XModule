@@ -1,0 +1,190 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+# truncate string
+#
+rule truncate-str ( str dots ? )
+{
+    dots ?= ............ ;
+
+    return [ MATCH ^($(dots)).*$ : $(str) ] ;
+}
+
+# munge URL/File compoenent string into something smaller
+#
+rule munge-str ( str )
+{
+    local r ;
+
+    for local s in [ regex.split $(str) [^a-zA-Z0-9] ] {
+        # only abbreviate if longer than 4 characters
+        if [ MATCH ^(.....).*$ : $(s) ] {
+            s =  [ string.abbreviate $(s) ] ;
+        }
+        if $(s) {
+            # combine numbers .
+            local numbers = [ MATCH ^([0-9]+)$ : $(s) $(r[-1]) ] ;
+            if $(numbers[2]) {
+                r = $(r[1--2]) $(r[-1]:E="")$(s) ;
+            } else {
+                r += $(s) ;
+            }
+        }
+    }
+
+    return $(r:J=.) ;
+}
+
+# return url parts
+#     can be empty "" if not found 
+#     not super robust, only works on valid URL
+#
+# ex: http://foo.com/some/path/file.html?arg=5&arg2=asdf
+#
+#   1 protocol  http://
+#   2 host      foo.com
+#   3 path      /some/path/file.html
+#   4 args      arg=5&arg2=asdf
+#
+# ex: path/to/file.txt
+#
+#   1 protocol ""
+#   2 host     ""
+#   3 path     path/to/file.txt
+#   4 args     ""
+#
+# ex: file:///path/to/file.txt
+#
+#   1 protocol ""
+#   2 host     ""
+#   3 path     /path/to/file.txt
+#   4 args     ""
+
+rule parse-url ( url )
+{
+    local m = [ MATCH ^([^?]*)[?]?(.*)$ : $(url) ] ;
+    local n = [ MATCH ^([a-z]+)://([^/]*)(|/.*)$ : $(m[1]) ] ;
+
+    return  $(n[1]:E=) 
+            $(n[2]:E=)
+            $(n[3]:E=$(m[1]:E=))
+            $(m[2]:E=) ;
+}
+
+# munge URL into something a bit smaller, for file locations
+#
+# use '<hostbasename>_<filebasename>_XXXXX' as result
+#     XXXX = url hash
+
+rule munge-url ( url )
+{
+    local url-hash = [ truncate-str [ MD5 $(url) ] ...... ] ;
+
+    local base ;
+ 
+    local parts = [ parse-url $(url) ] ;
+
+    # host url?
+    if $(parts[1]) && $(parts[2]) && $(parts[3]) {
+        local host = $(parts[2]) ;
+        host = $(host:S=) ;
+        if $(host:S) {
+            host = [ MATCH ^\.(.*)$ : $(host:S) ] ;
+        }
+        host ?= "" ;
+        base = $(host) ;
+    }
+    # file reference?
+    else {
+        # two parents?
+        local p = $(url:D) ;
+        base  = $(p:D=) ;
+        p = $(p:D) ;
+        base  = $(p:D=) $(base) ;
+    }
+
+    # combine and join
+    local result ;
+    
+    for local s in $(base) $(url:B) {
+        result += [ munge-str $(s) ] ;
+    }
+  
+    return $(result:J=-).$(url-hash) ;
+}
+
+
+
+
+##################################################################
+##
+##    url-handlers
+##
+##################################################################
+
+
+rule url-handler ( url )
+{
+    local handler ;
+    local parts = [ parse-url $(url) ] ;
+
+    # by protocol
+    handler ?= $(.url-handler.by-protocol.$(parts[1]:E=)) ;
+
+    # by type
+    local type = [ type.type $(parts[3]:E=) ] ;
+    handler ?= $(.url-handler.by-type.$(type:E=)) ;
+
+    # by default
+    handler ?= $(.url-handler.default) ;
+
+    return $(handler) ;
+}
+
+rule url-handler-types ( handler )
+{
+    return $(.url-handler.$(handler).types) ; 
+}
+
+rule register-url-handler ( handler url-type target-type ? : protocols * : types * : default ? )
+{
+    feature.extend xurl-handler : $(handler) ;
+
+    .url-handler.$(handler).types = $(url-type) $(target-type) ; 
+
+    for local p in $(protocols) {
+        .url-handler.by-protocol.$(p) = $(handler) ;
+    }
+    for local t in $(types) {
+        .url-handler.by-type.$(t) = $(handler) ;
+    }
+
+    if $(default) {
+        .url-handler.default = $(handler) ;
+    }
+}
+
+
+
+rule __test__url ( )
+{
+    import assert ;
+
+    assert.result http foo.com /some/file.html arg=5 : parse-url http://foo.com/some/file.html?arg=5   ;
+    assert.result http foo.com "/" "" : parse-url http://foo.com/  ;
+    assert.result http foo.com "" "" : parse-url http://foo.com   ;
+    assert.result http foo.com "/" arg=1 : parse-url http://foo.com/?arg=1  ;
+    assert.result http foo.com "" arg=2 : parse-url http://foo.com?arg=2   ;
+    
+    assert.result file "" /path/to/file.txt "" : parse-url file:///path/to/file.txt ;
+    assert.result file "" /path/to/file.txt "arg=2" : parse-url file:///path/to/file.txt?arg=2 ;
+
+    assert.result "" "" /path/to/file.txt "" : parse-url /path/to/file.txt ;
+    assert.result "" "" /path/to/file.txt "arg=2" : parse-url /path/to/file.txt?arg=2 ;
+
+    assert.result "" "" path/to/file.txt "" : parse-url path/to/file.txt ;
+    assert.result "" "" path/to/file.txt "arg=2" : parse-url path/to/file.txt?arg=2 ;
+
+}

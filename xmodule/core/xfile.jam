@@ -1,0 +1,187 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+##################################################################
+##
+##   xfile export target generator
+##
+##################################################################
+
+class xfile-target : xmodule-workspace-file-target
+{
+    rule actualize-location ( target )
+    {
+        # this target itself we do not cause any updates because of.
+        # generate 'updates' via <dependency> on xmodule, NOT the export
+        NOUPDATE $(target) ;
+
+        # do NOT create the 'path' portion of the name
+        # that is expected to be created by sources
+        if $(self.action) && $(target) = [ actual-name ] {
+            LOCATE on $(target) = [ path ] ;
+        } else {
+            SEARCH on $(target) = [ path.native $(self.path) ] ;
+        }
+    }
+}
+
+rule xfile-type ( property-set : property )
+{
+    local type = [ $(property-set).get $(property) ] ;
+
+    if $(type[2]) {
+        basic-generator-error "multiple $(property) features " 
+            : : $(property)$(type) ;
+    }
+    
+    if $(type) && ! [ type.registered $(type) ] {
+        local t = [ type.type $(type) ] ;
+        if ! $(t) {
+            basic-generator-error  
+                "$(property) feature used with invalid type"
+            : : " invalid value: $(type)" ;
+        }
+        type = $(t) ;
+    }
+    return $(type) ;    
+}
+
+class xmodule-xfile-passthrough-generator : xmodule-export-generator
+{
+    import xmodule : xfile-type ;
+
+    rule x-run ( project name ? : property-set : source )
+    {
+        local type = [ $(source).type ] ;
+        local cast = [ xfile-type $(property-set) : <$(self.target-types[1]:L)-type> ] ;
+        if $(cast) && $(type) != $(cast) {
+            $(source).change-type $(cast) ; 
+        }
+       return  [ property-set.empty ]
+                $(source) ;
+    }
+}
+
+rule register-xfile-passthrough-generator ( sources * : type )
+{
+    generators.register [ new xmodule-xfile-passthrough-generator 
+                                xmodule.$(type:L)-passthrough 
+                                : $(sources) : * : $(type) ] ;
+}
+
+class xfile-export-generator : xmodule-export-generator
+{
+    import xmodule : xfile-type ;
+
+    # get the explicit type of targets, can be empty
+    # indicating reliance on implicit-type rule
+    rule explicit-type ( property-set )
+    {
+        local mutability = mutable ;
+        # adjust TYPE if it has been explicitly set
+        local type = $(self.target-types[1]) ;
+        if $(type) = XFILE {
+            mutability = immutable ;
+            type = [ xfile-type $(property-set) 
+                        : <$(self.target-types[1]:L)-type> ] ;
+        }
+        return $(mutability) $(type) ;
+    }
+
+    # get the explicit type from target name
+    # result can be empty
+    rule implicit-type ( target-name )
+    {
+        # detect type from file
+        return [ type.type $(target-name:D=) ] ;
+    }
+
+    rule generated-targets ( xmpath : property-set : project name ? )
+    {
+        assert.true type.is-derived [ $(xmpath).type ] XMODULE ;
+
+        local encoded-names = [ xnames $(xmpath) : $(property-set) : : "." ] ;
+        if ! $(encoded-names) {
+            generator-error "Cannot export file without a name!"
+                         : $(project) : $(xmpath) : $(name) ;
+        }
+
+        #TODO: consider making XFILE from Source work again?
+        #      -- why? -- maybe just delete.
+        #      -- if so, get-xname should probably support this
+
+        # adjust TYPE if it has been explicitly set
+        local mutability,type = [ explicit-type $(property-set) ] ;
+        local mutability = $(mutability,type[1]) ;
+        local type       = $(mutability,type[2]) ;
+
+        #tty.coded_echo <RED> name:$(name) " " <BLUE> $(encoded-names) " " <GREEN> explicit-type: $(type) ;
+
+        # outputs of xfile-target rule
+        local rule xfile-target ( encoded-name )
+        {
+            local target-path ;
+            local target-name ;
+
+            # base path at appropriate location
+            local path,name = [ $(xmpath).export-path,name $(encoded-name:D) ] ;
+
+            # path
+            target-path = $(path,name[1]) ;
+
+            # keep second element of path,name name-path
+            if $(path,name[2]) {
+                target-name = $(path,name[2]) ;
+            }
+
+            # name part -- use this target's property-set
+            target-name += [ add-prefix-and-suffix  $(encoded-name:D=)
+                             : $(type) : $(property-set) $(mutability) ] ;
+            # join
+            target-name = [ path.join $(target-name) ] ;
+
+            # detect type?
+            local file-type = $(type) ;
+            if ! $(file-type) {
+                file-type = [ implicit-type $(target-name) ] ;
+            }
+            file-type ?= XFILE ;
+       
+            # if a generated file
+            return  [ virtual-target.register
+                      [ new xfile-target
+                           $(target-name)
+                         : $(file-type)
+                         : [ $(xmpath).workspace ]
+                         : $(project)
+                         : [ export-file-action $(xmpath) 
+                                : $(property-set) ]
+                         : $(target-path)
+                    ] ] ;
+        
+        }
+
+        # create targets
+        local targets = [ sequence.transform xfile-target : $(encoded-names) ] ;
+
+
+
+        # need to have created a target, even if <xinclude>'s exist
+        if $(targets)
+        {
+            # create 'xinclude' property-set from <xinclude>'s
+            return  [ xinclude-property-set $(xmpath) :
+                        [ sequence.transform path-target XINCLUDE
+                              $(project) $(xmpath) $(property-set)
+                            : [ $(property-set).get <xinclude> ]
+                    ]   ]
+                    $(targets) ;
+        }
+        else {
+            generator-error "Failed to generate targets!"
+                         : $(project) : $(xmpath) : $(name) ;
+        }
+    }
+}

@@ -1,0 +1,64 @@
+xdist       mixed-dist  : configure-pkg/configure ;
+xinclude    mixed-inc   : mixed-dist//include ;
+
+
+# verify that regular prebuild system libs still work
+
+lib mixz : : <name>z ;
+
+
+lib mixlib1 : mixed-dist//lib/!foo mixz : <link>static ;
+
+lib mixlib2 : mixed-dist mixz : <name>lib/!foo <link>static  ;
+
+lib mixlib3 : mixed-dist mixz : <xpath>lib <name>!foo <link>static  ;
+
+
+xlib mixlib4 : mixed-dist//lib/!foo mixz : <link>static ;
+
+xlib mixlib5 : mixed-dist mixz : <name>lib/!foo <link>static  ;
+
+xlib mixlib6 : mixed-dist mixz : <xpath>lib <name>!foo <link>static  ;
+
+
+lib mixlib7 : mixed-dist//lib/!foo mixz : <xinclude>include <link>static  ;
+
+lib mixlib8 : mixed-dist mixz : <name>lib/!foo <xinclude>include <link>static ;
+
+lib mixlib9 : mixed-dist mixz : <xpath>lib <name>!foo <xinclude>include <link>static ;
+
+
+xlib mixlib10 : mixed-dist//lib/!foo mixz : <xinclude>include <link>static ;
+
+xlib mixlib11 : mixed-dist mixz : <name>lib/!foo <xinclude>include <link>static ;
+
+xlib mixlib12 : mixed-dist mixz : <xpath>lib <name>!foo <xinclude>include <link>static ;
+
+
+
+lib mixlib13 : mixed-inc mixed-dist//lib/!foo mixz : <link>static ;
+
+lib mixlib14 : mixed-inc mixed-dist mixz : <name>lib/!foo <link>static  ;
+
+lib mixlib15 : mixed-inc mixed-dist mixz : <xpath>lib <name>!foo <link>static  ;
+
+
+xlib mixlib16 : mixed-inc mixed-dist//lib/!foo mixz : <link>static ;
+
+xlib mixlib17 : mixed-inc mixed-dist mixz : <name>lib/!foo <link>static  ;
+
+xlib mixlib18 : mixed-inc mixed-dist mixz : <xpath>lib <name>!foo <link>static  ;
+
+
+lib mixlib19 : mixed-inc mixed-dist//lib/!foo mixz : <xinclude>include <link>static  ;
+
+lib mixlib20 : mixed-inc mixed-dist mixz : <name>lib/!foo <xinclude>include <link>static ;
+
+lib mixlib21 : mixed-inc mixed-dist mixz : <xpath>lib <name>!foo <xinclude>include <link>static ;
+
+
+xlib mixlib22 : mixed-inc mixed-dist//lib/!foo mixz : <xinclude>include <link>static ;
+
+xlib mixlib23 : mixed-inc mixed-dist mixz : <name>lib/!foo <xinclude>include <link>static ;
+
+xlib mixlib24 : mixed-inc mixed-dist mixz : <xpath>lib <name>!foo <xinclude>include <link>static ;

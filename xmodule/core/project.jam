@@ -1,0 +1,300 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+
+# This file creates a xmodule-project-target class
+#
+# This is a project-target derived class
+#   It allows project reference syntax to enable reference to
+#   resources inside an xmodule target
+#
+#   Example reference that resolves as a C file in the dist xmodule:
+#
+#     mydist//path/file.c
+#
+#   If the type of reference is not automatically known by type system (.name)
+#     the target will be an XRSRC target, which XMODULE export targets can
+#     work with.  xinclude, xfile, xpath, etc
+#
+#     xinclude myinclude : repo//package-name/include ;
+#     xfile    myfile    : repo//package-name/src/file.txt ;
+#
+#
+#   You can specify the type of a given reference with type@path/
+#
+#     mydist//configure@path/configure-script
+#
+#     xinclude name : repo//include ;  # no required <xinclude> arg?
+
+rule xmodule-project ( project : name : type : sources * : target-requirements * )
+{
+
+    # synthesize project under current project
+    local cur-location = [ $(project).location ] ;
+    local location = [ path.join $(cur-location) $(name) ] ;
+
+
+    local xproj-module = [ project.load $(location) : synthesize ] ;
+
+    # create our own project-target
+    local requirements  = [ project.attribute $(xproj-module) requirements ] ;
+    local xproj-project = [ new xmodule-project-target $(xproj-module)
+                             : $(xproj-module) $(project) : $(requirements) :
+                             : $(name) $(type) : $(sources) : $(target-requirements) ] ;
+
+    # set it into the project space
+    modules.poke project : .target.$(xproj-module) : $(xproj-project) ;
+
+    # treat this as a buildable target in the current space
+    module [ $(project).project-module ] {
+        alias $(2) : ./$(2)// ; 
+    }
+
+    return $(xproj-project) ;
+}
+
+
+# custom project class
+class xmodule-project-target : project-target
+{
+    import type ;
+    import feature ;
+    import xmodule : parse-url ;
+
+    rule __init__ ( name : project-module parent-project
+        : requirements * : default-build *
+        : xmodule-name xmodule-type : xmodule-sources * : target-requirements * )
+    {
+        project-target.__init__ $(name) : $(project-module) $(parent-project)
+                        : $(requirements) : $(default-build) ;
+
+        self.xmodule-name = $(xmodule-name) ;
+        self.xmodule-type = $(xmodule-type) ;
+        self.parent       = $(parent-project) ;
+
+        # set source location and location attributes to same as parent.
+        local attributes = [ project.attributes $(project-module) ] ;
+        $(attributes).set source-location : [ $(parent-project).get source-location ] : exact ;
+        $(attributes).set location        : [ $(parent-project).get location ] : exact ;
+
+        local parent-location = [ $(parent-project).location ] ;
+        if $(parent-location) = "." {
+            self.virtual-location = ./$(self.location) ;
+        } else {
+            self.virtual-location = $(self.location) ;
+        }
+        self.location         = $(parent-location) ;
+
+        self.xmodule-sources      = $(xmodule-sources) ;
+        self.xmodule-requirements = $(target-requirements) ;
+    }
+
+    rule virtual-location ( )
+    {
+        return $(self.virtual-location) ;
+    }
+
+
+    rule name-type-reqs-from-id ( id )
+    {
+        local type  ;
+        local name   ;
+        local requirements ;
+        local explicit-type ;
+
+
+        # first look for an explicit type reference "type@"
+        #   - avoid @(...:E=) pattern with [@](...:E)
+        #   - b2 was matching the other instead, annoyingly
+        local ex = [ MATCH "^([^@/]+)[@](.*)$" : $(id) ] ;
+        if $(ex) {
+            # explicit TYPE
+            if [ type.registered $(ex[1]) ] {
+                type = $(ex[1]) ;
+            }
+            # maybe it's a rule-name instead
+            type ?= [ type.type-from-rule-name $(ex[1]) ] ;
+
+            # filename-etc?
+            type ?= [ type.type $(ex[1]) ] ;
+
+             # maybe it was a suffix, without ".", add it
+            type ?= [ type.type .$(ex[1]) ] ;
+
+            # maybe it's an xrule masquerading as base-type
+            local xrule-base = [ MATCH ^x(.*)$ : $(ex[1]) ] ;
+            if ! $(type) && $(xrule-base) {
+                type = [ type.type-from-rule-name $(xrule-base) ] ;
+            }
+
+            # got no idea.
+            if ! $(type) {
+                errors.error "invalid type: $(ex[1]) " ;
+            }
+            # explicit
+            explicit-type = $(type) ;
+            name = $(ex[2]) ;
+        }
+
+        # if id ends in "/" or "/." consider this an XPATH
+        # - note, for id to end in '/', source-ref must end with '//'
+        #   - example: " lib name : xdistpkg//lib// ; "
+
+        if ! $(type) {
+            local xpath = [ MATCH "^(|.*[^/])/\.?$" : $(id) ] ;
+            if $(xpath) {
+                name = $(xpath) ;
+                type = XPATH ;
+            }
+         }
+        # otherwise name IS id
+        name ?= $(id) ;
+
+        # try from id
+        type ?= [ type.type $(id) ] ;
+
+        # otherwise, treat as XRSRC
+        type ?= XRSRC ;
+
+
+        # use XFILE for all non-specialized types
+        # TODO: consider allow xdist@ ???
+        local original-type = $(type) ;
+
+        if ! $(type) in [ type.all-derived XMODULE ] XINCLUDE
+                        [ type.all-bases   XLIB    ]
+        {
+            type = XFILE ;
+        }
+
+        # requirements
+        requirements += <name>$(name) ;
+
+        # add explicit type to xfile (if it was set)
+        if $(type) = XFILE {
+            requirements += <xfile-type>$(explicit-type) ;
+        }
+
+         #echo name-type-reqs-from-id id:'$(id:E=)' xmodule-type:$(self.xmodule-type:E=unknown) name:'$(name:E=)' reqs: $(requirements) type:'$(type:E=)'  explicit-type: $(explicit-type) original-type: $(original-type) ;
+
+        return $(name) $(type) $(requirements) ;
+    }
+
+    rule find-really ( id )
+    {
+        local r ;
+
+        # echo Xmodule-Project $(self.xmodule-name) $(__name__) Find-Really id: $(id) ;
+
+        local rule cache-parent-targets ( source )
+        {
+            local n ;
+            local p ;
+            if [ class.is-instance $(source) ] {
+                n = [ $(source).name ] ;
+                p = [ $(source).project ] ;
+            }
+            else {
+                # Separate target name from properties override.
+                local split = [ MATCH "^([^<]*)(/(<.*))?$" : $(source) ] ;
+                local id = $(split[1]) ;
+                if ! $(split) || ! $(split[1]) {
+                    error "Malformed target reference $(source)" ;
+                }
+
+                n = $(split[1]) ;
+                p = $(self.parent) ;
+            }
+
+            local f = [ $(p).find $(n) : no-error ] ;
+            if $(f) {
+                #echo "in xmodule-project $(self.xmodule-name) $(__name__) adding source $(n) as cached target:" $(f) ;
+                self.x-targets.$(n) = $(f) ;
+            }
+            else {
+                local url = [ parse-url $(n) ] ;
+                if ! $(url[1]) {
+                    echo 'Warning: target/file $(n) not found.' ;
+                }
+            } 
+        }
+
+
+        # process xmodule-sources
+        if $(self.xmodule-sources) {
+
+            for local s in $(self.xmodule-sources) {
+                cache-parent-targets $(s) ;
+            }
+
+            for local r in $(self.xmodule-requirements) {
+                local p = $(r:G) ;
+                local v = $(r:G=) ;
+
+                if dependency in [ feature.attributes $(p) ] {
+                    cache-parent-targets $(v) ;
+                }
+                
+            }
+
+            # just process once
+            self.xmodule-sources = ;
+            self.xmodule-requirements = ;
+        }
+
+        # try cache
+        if $(self.x-targets.$(id)) {
+            r = $(self.x-targets.$(id)) ;
+        }
+
+
+        # try base-implementation
+        if ! $(r) {
+            r = [ project-target.find-really $(id) ] ;
+            if $(r) {
+                 # echo Xmodule-Project base-class found id: $(id) ;
+            }
+        }
+
+
+        # create a xrsrc
+        if ! $(r) {
+            local res = [ name-type-reqs-from-id $(id) ] ;
+
+            local main-name    = $(res[1]) ;
+            local type         = $(res[2]) ;
+            local requirements = $(res[3-]) ;
+
+             # echo project-ref $(id)
+             #     "\n\t     main-name:" $(main-name)
+             #     "\n\t          type:" $(type)
+             #     "\n\t  requirements:" $(requirements) ;
+
+            local project = $(self.project) ;
+
+            local alt = [ new xmodule-typed-target $(main-name)
+                               : $(project) : $(type)
+                               : $(self.xmodule-name)
+                               : [ targets.main-target-requirements
+                                      $(requirements)
+                                    : $(project) ] ] ;
+
+            local main = [ new main-target $(main-name) : $(project) ] ;
+
+            self.x-targets.$(id) = $(main) ;
+
+            # seems to get unstable if this is done
+            #self.main-targets += $(main) ;
+
+            $(main).add-alternative $(alt) ;
+
+            r = $(main) ;
+        }
+
+        # echo Xmodule-Project $(self.xmodule-name) $(__name__) Find-Really id: $(id) returning: $(r) ;
+
+        return $(r) ;
+    }
+}

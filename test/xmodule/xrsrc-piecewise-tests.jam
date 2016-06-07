@@ -1,0 +1,22 @@
+xrepo       r1-self    : file://$(ROOT)/.git ;
+xfile       r1-conf1   : r1-self  : <name>test/xmodule/configure-pkg/configure ;
+xpath       r1-xpath   : r1-self  : <name>test/xmodule ;
+xfile       r1-conf2   : r1-xpath : <name>configure-pkg/configure ;
+xmakefile   r1-mkfile  : r1-conf1 ;
+xbuild      r1-build   : r1-mkfile : <xbuild-arg>all <xbuild-arg>tests  ;
+xfile       r1-build-test : r1-build//tests.out ;
+xdist       r1-dist    : r1-build  : <xdist-arg>install <xdist-arg>extras ;
+xfile       r1-dist-test  : r1-dist//extras.install ;
+
+
+xrsrc       r1-test-rsrc    : r1-self      : <name>test        ;
+xpath       r1-src-xpath    : r1-test-rsrc : <name>xmodule/src ;
+
+xrsrc       r1-test-c-rsrc  : r1-src-xpath : <name>test.c  ;
+xrsrc       r1-inc-rsrc     : r1-dist      : <name>include ;
+
+xinclude    r1-inc      : r1-inc-rsrc ;
+xfile       r1-test-c   : r1-test-c-rsrc ;
+
+obj         r1-obj      : r1-test-c : <implicit-dependency>r1-inc <dependency>r1-inc ;
+obj         r1-obj2     : r1-test-c r1-inc ;

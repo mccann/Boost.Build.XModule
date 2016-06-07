@@ -1,0 +1,92 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+
+# if 'name' starts or ends with ! - do not apply prefix or postfix respectivly
+#   - will not duplicate existing prefix
+#
+# lib example:
+#           foo         => "libfoo.so"
+#          !foo         => "foo.so"
+#          !foo!        => "foo"
+#          !foo.plugin! => "foo.plugin"
+#           foo#3.0     => "libfoo.so.3.0"      # shared-lib linux
+#           foo#3.0     => "libfoo.3.0.dylib"   # shared-lib osx
+#           foo#3.0     => "libfoo.a"           # static-lib, ignore 'Version'
+#
+# based on virtual-target.add-prefix-and-suffix -- see that for comments
+
+rule decode-name ( encoded-name )
+{
+    return [ MATCH ^(!|)(|[^#]*[^!#])(!|)(#([^!]*))?$ : $(encoded-name) ] ;
+}
+
+# where to put 'so version'
+.so-version-position = tail ;
+if [ modules.peek : OS ] = MACOSX {
+    .so-version-position = middle ;
+}
+
+rule add-prefix-and-suffix ( encoded-name : type ? : property-set mutability )
+{
+    local suffix ;
+    local prefix ;
+    local middle ;
+    local tail   ;
+
+    local m = [ decode-name $(encoded-name) ] ;
+
+    # no type no prefix/suffix
+    if $(type) && $(mutability) = mutable {
+
+        # suffix
+        if ! $(m[3]) {
+            suffix = [ type.generated-target-suffix $(type)
+                       : $(property-set) ]
+                       ;
+            if $(suffix:G) {
+                suffix = [ utility.ungrist $(suffix) ] ;
+            } else {
+                suffix = .$(suffix) ;
+            }
+        }
+
+        # prefix
+        if ! $(m[1]) {
+            prefix = [ type.generated-target-prefix $(type)
+                       : $(property-set) ]
+                       ;
+            if  [ MATCH ^($(prefix)) : $(m[2]) ] {
+                prefix = ;
+            }
+        }
+
+        # so version?
+        if $(m[5]) && $(type) = SHARED_LIB {
+            $(.so-version-position) = .$(m[5]) ;
+        }
+    }
+
+    return $(prefix:E="")$(m[2])$(middle:E=)$(suffix:E="")$(tail:E=) ;
+}
+
+# if 'name' starts or ends with ! - do not apply prefix or postfix respectivly
+#   - will not duplicate existing prefix
+#
+# control source-type matching with [!]?RULE[+]?
+#  RULE  - match RULE
+#  RULE+ - match RULE and its viable sources
+# !RULE  - deny RULE
+# !RULE+ - deny RULE and its viable sources
+#
+#  RULE can be * to indicate 'ALL'
+#
+rule match-type-decode ( encoded-name )
+{
+    return [ MATCH ^(!?)([^!\\+]+)(\\+?)$ : $(encoded-name) ] ;
+}
+
+
+

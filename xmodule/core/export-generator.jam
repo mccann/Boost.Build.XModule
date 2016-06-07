@@ -1,0 +1,464 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+
+
+##################################################################
+##
+##   xmodule export target generator
+##
+##################################################################
+
+
+class xmodule-export-generator : xmodule-generator
+{
+    import xmodule : add-prefix-and-suffix
+                     match-type-decode
+                   ;
+
+    rule __init__   ( id composing ? : source-types * : aux-sources *
+                    : target-type : requirements * )
+    {
+        for local s in $(source-types) {
+            local m = [ match-type-decode $(s) ] ;
+            if ! $(m) {
+                errors.error  "expect source-types with optional ! and + markup"
+                            : "id: $(id)"
+                            : "passed source-types:" $(source-types)
+                            ;
+            }
+
+            local action = allow ;
+            if $(m[1]) = "!" {
+                action = deny ;
+            } else {
+                self.actual-source += $(m[2]) ;
+            }
+            local types = explicit ;
+            if $(m[3]) = "+" {
+                types += implicit ;
+            }
+
+            for local t in $(types) {
+                self.$(t).$(action) += $(m[2]) ;
+            }
+        }
+
+        if  (  ! $(self.actual-source) 
+            && ! [ MATCH ^(.*-passthrough)$ : $(id) ] 
+            ) 
+            || ( ! $(composing) && $(self.actual-source[2]) )
+        {
+           errors.error  "expect one 'actual-source' type (implied *,denied *)"
+                        : "id: $(id)"
+                        : "passed source-types:" $(source-types)
+                        : "actual-source:" $(self.actual-source)
+                        ;
+        }
+
+        # these instead for generator system?
+        aux-sources ?= $(self.actual-source) ;
+
+        # in case of 'all'
+        if * in $(aux-sources) {
+            aux-sources = ;
+        }
+
+        generator.__init__ $(id) $(composing) : $(aux-sources)
+                            : $(target-type) : $(requirements)  ;
+
+
+#         echo export $(self.id) setup self.explicit.allow: $(self.explicit.allow) ;
+#         echo export $(self.id) setup self.explicit.deny:  $(self.explicit.deny) ;
+#         echo export $(self.id) setup self.implicit.allow: $(self.implicit.allow) ;
+#         echo export $(self.id) setup self.implicit.deny:  $(self.implicit.deny) ;
+
+        if $(self.id) in xmodule.xpath+-lib {
+            assert.not-equal : $(self.implicit.allow) ;
+        }
+    }
+
+    # return deny error msg if denied
+    rule deny-type ( type name ? : no-log ? )
+    {
+        local rule viable-sources ( type ) {
+            local r = [ generators.viable-source-types $(type) ] ;
+            if $(r) = * {
+                errors.error "Registration problem"
+                            : "denied type $(type) has * for source types"
+                            : "id: $(id)"
+                            ;
+            }
+            return $(type) $(r) ;
+        }
+        local rule expand ( action ) {
+            self.expanded.$(action)  = [ sequence.transform type.all-derived 
+                                         : $(self.explicit.$(action)) ] ;
+            self.expanded.$(action) += [ sequence.transform viable-sources
+                                         : $(self.implicit.$(action)) ] ;
+            self.expanded.$(action)  = [ sequence.unique
+                                         $(self.expanded.$(action)) ] ;
+
+#             echo generator: $(self.id) ;
+#             echo self.explicit.$(action) is $(self.explicit.$(action)) ;
+#             echo self.implicit.$(action) is $(self.implicit.$(action)) ;
+#             echo self.expanded.$(action) is $(self.expanded.$(action)) ;
+        }
+
+        # generate types?
+        if ! $(self.types-permitted) {
+            expand allow ;
+            expand deny ;
+
+            # simulate 'difference' with all
+            if $(self.expanded.deny) = * {
+                self.expanded.allow = ;
+            }
+            # explicit allowed is greater than denied
+            #  so, those will always be included
+            self.types-permitted =  [ sequence.unique
+                                        $(self.explicit.allow)
+                                        [ set.difference
+                                             $(self.expanded.allow)
+                                           : $(self.expanded.deny)
+                                    ]   ] ;
+
+            if * in $(self.types-permitted) || ! $(self.types-permitted) {
+                self.types-permitted = * ;
+            }
+            if $(self.types-permitted) = * && $(self.expanded.deny) = *
+            {
+                errors.error "Registration problem"
+                            : "* for both allow and deny"
+                            : "id: $(id)"
+                            ;
+            }
+        }
+
+        local permit ;
+
+        # everything permitted? - check not denied
+        if $(self.types-permitted) = * {
+            if ! $(type) in $(self.expanded.deny) {
+                permit = true ;
+            }
+        }
+        # short list of permitted types
+        else if $(type) in $(self.types-permitted) {
+            permit = true ;
+        }
+
+        local r ;
+
+        if ! $(permit) {
+            r += "         denying: $(type)" ;
+            if $(self.types-permitted) = * {
+                r += "    denied-types: $(self.expanded.deny:E=:J= )" ;
+            }
+            else {
+                r += " permitted-types: $(self.types-permitted:E=:J= )" ;
+            }
+        }
+        # log
+        else if ! $(no-log) {
+            dout [ indent ] "               permitted: $(type)" ;
+            dout [ indent ] "            denied-types: $(self.expanded.deny:E=:J= )" ;
+            dout [ indent ] "         permitted-types: $(self.types-permitted:E=:J= )" ;
+        }
+
+
+        return $(r) ;
+    }
+
+
+
+    # get export file/path name(s)
+    #
+    #  * 'main-target' is true when this generator's target-type
+    #     is the main-target-type
+    #
+    # Cases:
+    #
+    #  1. source's type is XRSRC
+    #             - Use the XRSRC value
+    #
+    #  2. main-target with <name>
+    #             - Use the explicit <name> feature value
+    #
+    #  3. Cases 1 && 2
+    #               - combine both values,
+    #                 treating XRSRC as a base path to <name> value
+    #
+    #  4. main-target with <xorig-target-name>, and not the above cases:
+    #             - use the <xorig-target-name> feature value
+    #
+    #  5. NOT main-target with <$(aux-name)>
+    #             - use the <$(aux-name)> feature value
+    #
+    #  6. When all else fails, use empty string ""
+
+    rule xnames ( source : property-set : aux-name ? : constraint )
+    {
+        local resource ;
+        local xnames   ;
+
+        rule log ( case desc * )
+        {
+            if ! true {
+                # 1 2 3 4 5
+                if $(case) in 1 2 3 4 5 6 {
+                    echo "xnames: case $(case) target name:"
+                        '$(xnames:E=undefined)'
+                        -- $(desc) $(self.id) $(self.target-types)  ;
+                }
+                if $(case) in 4 6 {
+
+                    echo "             self-target-types:" $(self.target-types) ;
+                    echo "                   source-type:" [ $(source).type ] ;
+                    echo "                      resource:" '$(resource:E=undefined)' ;
+                    for local f in main-target-type xorig-target-name name $(aux-name) {
+                        local v = [ $(property-set).get <$(f)> ] ;
+                        echo "                   <$(f)>" '$(v:E=undefined)' ;
+                    }
+                }
+            }
+        }
+
+        # case 1
+        if [ type.is-derived [ $(source).type ] XRSRC ] {
+            resource = [ $(source).name ] ;
+        }
+
+        # cases 2,3,4 depend on this being a main-target
+        # needs to match exactly, no 'is-derived' call here
+        if [ $(property-set).get <main-target-type> ] in $(self.target-types)
+        {
+            # cases 2,3
+            local names = [ $(property-set).get <name> ] ;
+            if $(names) {
+                # case 3
+                if $(resource) {
+                    for local name in $(names) {
+                        xnames += [ path.root $(name) $(resource) ] ;
+                    }
+                    log 3 XRSRC/<name> ;
+                }
+                # case 2
+                else {
+                    xnames = $(names) ;
+                    log 2 <name> ;
+                }
+            }
+
+            # case 4
+            else if ! $(resource) {
+                xnames = [ $(property-set).get <xorig-target-name> ] ;
+                log 4 <xorig-target-name>$(xnames:E=undefined) ;
+            }
+        }
+        else if $(aux-name) {
+            local aux-names = [ $(property-set).get <$(aux-name)> ] ;
+            if $(aux-names) {
+                xnames = $(aux-names) ;
+                log 5 $(aux-name) ;
+            }
+        }
+
+
+        if ! $(xnames) {
+            if $(resource) {
+                xnames = $(resource) ;
+                log 1 XRSRC ;
+            }
+            else {
+                xnames = "" ;
+                log 6 Catch-All "RESOURCE:$(resource)" ;
+            }
+        }
+
+        #  at most one
+        if $(constraint) in "." "?" {
+            if $(xnames[2]) {
+                basic-generator-error $(xmpath)
+                        : "duplicate names for export with \"$(constraint)\""
+                          "constraint found!"
+                        : "     names found:" $(xnames)
+                        : "          target:" $(name) ;
+            }
+        }
+
+        #  at least one
+        if $(constraint) in "." "+" {
+            if ! $(xnames) {
+                basic-generator-error "$(self.target-types[1]:L) export from"
+                                      "xmodule requires a name. Try <name>"
+                        : $(xmpath)
+                        : [ tty.join "          target:" <red> $(name) ]
+                        : [ tty.join "      properties:" <cyan>
+                                                    [ $(property-set).str ] ] ;
+            }
+        }
+
+        return $(xnames) ;
+    }
+
+    rule invalid-inputs-ex ( sources * : name ? )
+    {
+        local result ;
+        for local source in $(sources) {
+            result += [ deny-type [ $(source).type ] $(name) ] ;
+        }
+        
+        return $(result) ;
+    }
+
+    rule invalid-inputs ( project name ? : property-set : sources * )
+    {
+        local result = [ xmodule-generator.invalid-inputs $(project) $(name)
+                                                : $(property-set)
+                                                : $(sources) ] ;
+
+        if ! $(result) {
+            result += [ invalid-inputs-ex $(sources) : $(name) ] ;
+        }
+        return $(result) ;
+    }
+
+
+    rule export-file-action ( xmpath : property-set )
+    {
+        # depend on module, not xmpath -- ( canonical )
+        # only dependencies from property-set
+        return  [ new action [ $(xmpath).xmodule ]
+                    : xmodule.export-file
+                    : [ property-set.create 
+                        [ $(property-set).dependency ] ] ] ;
+    }
+
+    rule export-path-action ( xmpath : property-set )
+    {
+        # depend on module, not xmpath -- ( canonical )
+        # only dependencies from property-set
+        return  [ new non-scanning-action [ $(xmpath).xmodule ]
+                    : xmodule.export-path
+                    : [ property-set.create 
+                        [ $(property-set).dependency ] ] ] ;
+    }
+
+    rule export-name ( xmpath name )
+    {
+        return [ $(xmpath).export $(name) ] ;
+    }
+
+    rule export-names ( xmpath property-set constraint aux-name ? )
+    {
+        return  [ sequence.transform export-name $(xmpath)
+                    : [ xnames $(xmpath) : $(property-set)
+                        : $(aux-name) : $(constraint) ] ] ;
+    }
+
+    rule path-target ( type project xmpath property-set rsrc )
+    {
+        return  [ virtual-target.register
+                  [ new xmodule-workspace-typed-path-target
+                      [ $(xmpath).export $(rsrc) ]
+                    : $(type) : [ $(xmpath).workspace ] : $(project)
+                    : [ export-path-action $(xmpath)
+                        : $(property-set) ]
+                ] ] ;
+    }
+
+    rule path-targets ( type project xmpath property-set
+                       constraint aux-name ? )
+    {
+        return  [ sequence.transform path-target 
+                      $(type) $(project) $(xmpath) $(property-set) 
+                    : [ xnames $(xmpath) : $(property-set)
+                        : $(aux-name) : $(constraint) ] ] ;
+    }
+
+    # create a property set with dependency on the xmpath, for exports
+    rule export-property-set ( xmpath : extra-raw-properties * )
+    {
+        local xmodule = [ $(xmpath).xmodule ] ;
+        return [ property-set.create <dependency>$(xmodule) 
+                                     $(extra-raw-properties) ] ;
+    }
+
+
+    # create a property set with dependencies on the given targets
+    #  - that enables dependent targets to have the target paths in
+    #    include path
+    rule xinclude-property-set ( xmpath : xincludes * )
+    {
+        # <implicit-dependency> causes the target path to be in include-path
+        return [ export-property-set $(xmpath) 
+                    : <implicit-dependency>$(xincludes) ] ;
+    }
+
+
+}
+
+local rule register-export-generator ( generator id composing ?
+                                     : sources +
+                                     : aux-sources *
+                                     : type
+                                     : override ?  )
+{
+    generators.register [ new $(generator) $(id) $(composing) : $(sources)
+                                : $(aux-sources) : $(type) ] ;
+    if $(override) {
+        generators.override $(id) : $(override) ;
+    }
+}
+
+rule register-export-generators ( xrule type composing ? : aux-sources * : override ? )
+{
+    local generator = $(xrule)-export-generator ;
+
+
+    if $(composing) {
+        register-export-generator $(generator) xmodule.$(type:L) $(composing)
+                            : XPATH+ XRSRC : $(aux-sources)
+                            : $(type) : $(override) ;
+    }
+    else {
+        register-export-generator $(generator) xmodule.xpath+-$(type:L) $(composing)
+                            : XPATH+ !XRSRC : $(aux-sources)
+                            : $(type) : $(override) ;
+
+        register-export-generator $(generator) xmodule.xrsrc-$(type:L) $(composing)
+                            : XRSRC : $(aux-sources)
+                            : $(type) : $(override) ;
+    }
+}
+
+
+
+actions is-path
+{
+    test -d "$(<)"
+}
+
+
+# verify that a file was created by xbuild/xdist
+actions is-file
+{
+    test -f "$(<)"
+}
+
+rule export-file ( target : source : properties * )
+{
+    xmodule.is-file       $(target) ;
+}
+
+rule export-path ( target : source : properties * )
+{
+    xmodule.is-path       $(target) ;
+}
+
+
+
+

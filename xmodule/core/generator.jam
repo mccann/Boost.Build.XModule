@@ -1,0 +1,317 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+class xmodule-generator : generator
+{
+    import property-set ;
+    import path ;
+    import assert ;
+    import errors ;
+    import set ;
+    import generators : generators.dout : dout ;
+    import tty ;
+    import utility ;
+    import xmodule : caller-instance-of-class ;
+
+    # return empty value to indicate that the inputs are VALID
+    # non-empty value will be treated as --debug-generators output string
+    # meant to be overloaded
+    # default implemenation requires name and one source
+    rule invalid-inputs ( project name ? : property-set : sources * )
+    {
+        local result ;
+
+        if ! $(name) { #&& ! $(self.composing) {
+            result = "no name" ;
+        }
+        else if ! $(sources) {
+            result = "no source" ;
+        }
+        else if $(sources[2]) && ! $(self.composing) {
+            result = "multiple sources" ;
+        }
+
+        return $(result) ;
+    }
+
+
+    # creates a property-set , filtering out invariant features
+    # looks at <xvariant> <xinvariant> 
+    # in addition to the xvariant, xinvariant arguments (defaults)
+    # these arguments are considered explicit statements, <xvariant> takes precendence
+    # implictly all properties are variant, but can be removed with xinvariant
+    # items removed with xinvariant can be kept with xvariant
+    rule xvariant-ps    ( property-set 
+                        : xvariant * 
+                        : xinvariant * 
+                        )
+    {
+        local raw   = [ $(property-set).raw ] ;
+
+        local rule filter ( feature : patterns * )
+        {
+            local result ;
+            patterns += [ $(property-set).get $(feature) ] ;
+            if $(patterns) {
+                for local p in $(raw) {
+                    if [ MATCH ^<($(patterns))>$ : $(p:G) ] {
+                        result += $(p) ;
+                    } 
+                }
+            }
+            return $(result) ;
+        }
+
+        # these basic boost.build properties are never filtered 
+        xvariant += use dependency implicit-dependency location-prefix ;
+
+        # this basic xmodule property is not filtered
+        xvariant += xworkspace ;
+
+        local variant   = [ filter <xvariant>   : $(xvariant)   ] ;
+        local invariant = [ filter <xinvariant> : $(xinvariant) ] ;
+ 
+        #echo raw: $(raw) ;
+        #echo variant: $(variant) ;
+      
+        if $(invariant) {
+            raw = [ set.difference $(raw) : $(invariant) ] ;
+        
+            if $(variant) {
+                raw += $(variant) ;
+            }
+
+            return [ property-set.create $(raw) ] ;
+        }
+
+        # no change
+        else {
+            return $(property-set) ;
+        }
+    }
+
+
+    # 'xmodule' x-run rule
+    #     permit implemenation class to implement it's own 'run'
+    #      - by default, just use generator.run
+    rule x-run ( project name ? : property-set : sources * )
+    {
+        return  [ generator.run $(project) $(name)
+                         : $(property-set) : $(sources) ] ;
+    }
+    # output generator-debug statement with context
+    rule debug-out ( msgs * ) {
+        generators.dout [ indent ]  "  ** generator:"
+                                    $(self.id) $(msgs) ;
+    }
+
+    rule run ( project name ? : property-set : sources * )
+    {
+        local invalid = [ invalid-inputs   $(project) $(name)
+                                         : $(property-set)
+                                         : $(sources) ] ;
+
+        local result ;
+        if ! $(invalid) {
+            debug-out "x-run (...)" ;
+            result = [ x-run $(project) $(name)
+                           : $(property-set) : $(sources) ] ;
+        }
+
+        if $(invalid) {
+            if $(invalid[2]) {
+                debug-out "pruned -- target: '$(name:E=)' " ;
+                for local r in $(invalid) {
+                    debug-out $(r) ;
+                }
+            } else {
+                debug-out "pruned ($(invalid)) -- target: '$(name:E=)' " ;
+            }
+        }
+        else if ! $(result) {
+            debug-out "x-run(...) --"
+                [ tty.join <RED> EMPTY RESULT ] ;
+
+            # it would be nice to print this out if we knew that
+            #   the result was empty because of THIS generator
+            #   however, it could that in generation of 'consumable'
+            #   types, something failed
+
+            #debug-out "SOURCES: " $(sources) $(codes[2])  ;
+
+        }
+
+        return $(result) ;
+    }
+
+    # get main-target class from target, can fail!
+    # - especially durring generation,
+    #   'constructing-main-target' can be used in that case
+    rule main-target ( target )
+    {
+        local subv = [ $(target).creating-subvariant ] ;
+        if $(subv) {
+            return [ $(subv).main-target ] ;
+        }
+    }
+
+    rule basic-error-join ( strs * )
+    {
+        return $(strs:J="\n                      ") ;
+    }
+
+    rule basic-generator-error ( message + : sources * : * )
+    {
+        local name = <unknown> ;
+        {
+            local main-target = [ caller-instance-of-class main-target ] ;
+            if $(main-target) {
+                name = [ $(main-target).full-name ] ;
+            }
+        }
+
+        # build
+        local sources-strs ;
+        for local s in $(sources) {
+            if [ class.is-instance $(s) ] {
+                s = [ $(s).name ] . [ $(s).type ] ;
+            }
+            sources-strs += $(s:J="") ;
+         }
+        # durring development, this is nicer to have errors.error
+#         errors.user-error $(codes[1])
+        errors.error
+              [ tty.join <RED> "While trying to build main-target $(name)" ]
+            : [ tty.join <red> " - A target generator failed" ]
+            : ""
+            : [ tty.join "       generator:" <red> $(self.id)
+              "(" $(self.source-types) ") -> (" $(self.target-types) ")" ]
+            : "       source(s):" [ basic-error-join $(sources-strs) ]
+            : $(3) : $(4) : $(5) : $(6) : $(7) # extra context
+            : ""
+            : [ tty.join <RED> " -" $(message) ]
+            : $(8) : $(9) : $(10) : $(11) : $(12) : $(13) : $(14) ;
+    }
+
+    rule generator-error ( message + : project : sources * : name ? : * )
+    {
+        basic-generator-error $(message) : $(sources)
+            : [ tty.join "     target-name:" <red> $(name:E=<unknown>) ]
+            : [ tty.join "         project:" <red> [ $(project).name ] ]
+            : : : :  # extra context
+            # post-message
+            $(5)  : $(6)  : $(7)  : $(8)  : $(9)  : $(10)
+            : $(11) ;
+    }
+}
+
+
+
+
+rule basic-generator-error ( message + : sources * : * )
+{
+    # find error-handler 
+    local err-handler ;
+
+    local generator = [ caller-instance-of-class xmodule-generator ] ;
+    if $(generator) {
+        err-handler = $(generator).basic-generator-error ;
+    } else {
+        err-handler = errors.error ;
+    }
+
+ $(err-handler) 
+    $(1) :  $(2) :  $(3) :  $(4) :  $(5) :  $(6) :  $(7) :  $(8) :  $(9) : $(10) 
+ : $(11) : $(12) : $(13) : $(14) : $(15) : $(16) : $(17) : $(18) : $(19) : $(20)
+ ;
+}
+
+
+
+## --xmodule-output  
+##   if set, rules will output content even when successful
+
+if --xmodule-output in [ modules.peek : ARGV ] {
+    .xmodule-output-actions = true ;
+}
+if --xmodule-output-full in [ modules.peek : ARGV ] {
+    .xmodule-output-actions = true ;
+    .xmodule-output-verbose = true ;
+}
+
+## This will not attempt to very 'success'/'fail' lines themselves succeed
+## 
+##  How to use:
+##
+##  XLOG = [ xmodule.logfile-action ] ;
+##
+##  actions my-action 
+##  {
+##     $(XLOG[1])=$(<[1])
+##     { 
+##       do stuff 
+##     } $(XLOG[2])
+##  }
+##
+
+rule logfile-action ( success * : fail * )
+{
+
+    local verbose-mode = +x ;
+    if $(.xmodule-output-verbose) {
+        verbose-mode = -x ;
+    } 
+    verbose-mode = "{ set $(verbose-mode) ; } 2>/dev/null" ;
+  
+    local tab = "    " ;
+    local rule clause ( op : lines * )
+    {
+        # ensure verbose mode is as desired
+        if $(lines) {
+            lines = $(verbose-mode) $(lines) ;
+        }
+        # give each line style 
+        lines = "\n$(tab)$(tab)$(lines)" ;
+        # clause
+        return " $(op) {$(lines:J=)\n$(tab)}" ;
+    }
+
+    # output in success case?
+    if $(.xmodule-output-actions) {
+        success += ": success!" ;
+        success += "<\"${logfile}\" sed 's/^/$(tab)/'" ;
+    }
+   
+    # fail lines
+    fail =
+        ": failure!" 
+        "<\"${logfile}.tmp\" sed 's/^/$(tab)(FAIL) /' 2>/dev/null"
+        ": remove old log" 
+        "rm -f \"${logfile}\""
+        $(fail)
+        false
+    ;
+
+    local result =
+        "> \"${logfile}.tmp\" 2>&1"
+        [ clause "&&" :
+            ": move log into place"
+            "mv \"${logfile}.tmp\" \"${logfile}\""
+        ]
+        [ clause "&&" : $(success) ]
+        [ clause "||" : $(fail)    ]
+        ;
+
+
+    # begin lines
+    local begin =
+        "# --xmodule-output to output action even when successful"
+        "# --xmodule-output-full to turn on shell debugging" 
+        $(verbose-mode)
+        "logfile" 
+        ;
+
+    return $(begin:J=\n$(tab)) $(result:J=) ;
+
+}

@@ -1,0 +1,238 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+# This module supports the 'xm' External Module build system
+# Specifically, responsible for building 'autotools' external modules
+
+import type ;
+import "class" : new ;
+import generators ;
+import toolset ;
+import feature ;
+import xmodule ;
+import xmodule-make ;
+
+# register xconfigure specific types
+type.register XBUILDCONF ;
+type.register XBUILDCONF_LOG ;
+type.register XCONFIGURE ;
+
+# register filenames associated with autotools types
+xmodule.register-filenames buildconf autogen.sh bootstrap : XBUILDCONF ;
+xmodule.register-filenames configure : XCONFIGURE ;
+
+xmodule.register-xmodule-rules xconfigure ;
+
+
+##################################################################
+##
+##   xconfigure configure generator
+##
+##################################################################
+
+class xconfigure-configure-generator : xmodule-generator
+{
+    import property-set ;
+    import path ;
+    import xmodule : refine-source-file-hash-dependencies ;
+
+    rule generated-targets ( XBUILDCONF : property-set : project name ? )
+    {
+        # run 'buildconf' in src dir
+        # out of source buildconf often breaks
+        # buildconf / bootstrap type scripts in theory should not be variant
+        # TODO: make a feature that copies entire src-dir
+        #       into build-dir, and builds there.
+        #       updated idea: modify 'xrepo' to support local dir as source
+        #                     xrepo would need to depend on xsrchash of source
+        #                     'copy' would need to ignore .git folder etc
+        #
+
+        property-set = [ refine-source-file-hash-dependencies
+                           $(property-set) $(project) $(name)
+                         : $(XBUILDCONF) ] ;
+
+        local buildconf-script = [ $(XBUILDCONF).name ] ;
+        local buildconf-path   = [ path.root [ $(XBUILDCONF).path ]
+                                             [ path.pwd ] ] ;
+
+        local a  = [ new non-scanning-action $(XBUILDCONF)
+                         : xmodule-configure.buildconf : $(property-set) ] ;
+
+        local t1 = [ new file-target $(buildconf-script:D)/configure exact
+                    : XCONFIGURE : $(project) : $(a) : $(buildconf-path) ] ;
+
+        local t2 = [ new file-target $(name)/log/$(buildconf-script:D=).log
+                    exact : XBUILDCONF_LOG : $(project) : $(a) ] ;
+
+         # log file is not intended to be depended upon, do not return it.
+        return  [ property-set.empty ] [ virtual-target.register $(t1) ] ;
+    }
+}
+
+# register generator
+generators.register [ new xconfigure-configure-generator buildconf
+                          : XBUILDCONF : XCONFIGURE  ] ;
+
+# buildconf (aka bootstrap,etc) option
+feature.feature xbuildconf-arg  : : free ;
+
+toolset.flags   $(__name__).buildconf OPTIONS : <xbuildconf-arg> ;
+
+
+XLOG = [ xmodule.logfile-action ] ;
+
+actions buildconf
+{
+    $(XLOG[1])="$(<[2])"
+    (
+        set -ex
+        : xconfigure buildconf/bootstrap action
+        :  - from: $PWD
+        :
+        cd $(>[1]:D)
+        ./$(>[1]:D=) "$(OPTIONS)"
+
+    ) $(XLOG[2])
+}
+
+
+##################################################################
+##
+##   xconfigure makefile generator
+##
+##################################################################
+
+# skewfix feature
+feature.feature xskewfix : on off : optional incidental ;
+
+
+class xconfigure-makefile-generator : xmake-makefile-generator
+{
+
+    rule makefile-action ( sources + 
+                         : workspace 
+                         : project
+                         : property-set
+                         : xvariant *
+                         )    
+    {
+        local skew-log ;
+        if [ $(property-set).get <xskewfix> ] != off 
+        {
+            skew-log =  [ xmodule.source-dependent-file-target
+                            $(project)
+                        :   $(sources[1])
+                        :   skew-fixes .log
+                        :   xmodule-configure.skew-fix 
+                        ] ;
+        }
+
+        return  [ xmake-makefile-generator.makefile-action
+                    $(1) $(skew-log) 
+                :   $(2) 
+                :   $(3)
+                :   $(4)
+                :   $(5) xskewfix
+                ] ;
+    }
+}
+
+
+generators.register [ new   xconfigure-makefile-generator 
+                              xmodule-configure.configure-makefile
+                            : XCONFIGURE 
+                    ] ;
+
+generators.register [ new   xconfigure-makefile-generator 
+                              xmodule-configure.configure-makefile
+                            : XCONFIGURE 
+                            : XMAKEFILE 
+                    ] ;
+actions skew-fix
+{
+    $(XLOG[1])="$(<[1])"
+    (
+        set -e
+        set -x # for logging
+          
+        # if this is an autotools project, hack around the timestamp skew
+        # issue caused by our servers having ext4 filesystems
+        # (with nanosecond modified time resolution) and so requiring exactly
+        # the same autotools version as the library developer used when
+        # building. This happens because git checkout is likely to write some
+        # files with marginally later timestamps and cause configure to thing
+        # it needs to re-run autoconf every time.
+        # See https://www.gnu.org/software/automake/manual/html_node/CVS.html
+        
+        # is this necessary?
+        aclocals=`find $(>[1]:D) -type f -name aclocal.m4`
+        if [ -n "$aclocals" ] ; then
+            # only do this if necessary
+          
+            : "fix-up timestamps for autotools"
+            : "below is based on suggested fix-timestamp.sh from link above"
+            : "but with some modifications to make it tolerant of projects"
+            : "which don't have some of the artifact file types"
+
+            : "aclocal-generated aclocal.m4 depends on locally-installed"
+            : "'.m4' macro files, as well as on 'configure.ac'"
+            find $(>[1]:D) -name aclocal.m4 -exec touch {} \;
+            sleep 1
+            : "autoconf-generated configure depends on aclocal.m4 and on"
+            : "configure.ac"
+            find $(>[1]:D) -name "$(>[1]:D=)" -exec touch {} \;
+            : "so does autoheader-generated config.h.in"
+            find $(>[1]:D) -name "config.h.in" -exec touch {} \;
+            : "and all the automake-generated Makefile.in files"
+            find $(>[1]:D) -name Makefile.in -exec touch {} \;
+            : "finally, the makeinfo-generated '.info' files depend on the"
+            : "corresponding '.texi' files"
+            find $(>[1]:D) -name *.info -exec touch {} \;
+        fi
+
+    ) $(XLOG[2])
+
+}
+
+
+rule configure-makefile ( targets * : sources * : properties * )
+{
+    xmodule-make.setup-makefile-generate-action 
+          $(__name__).configure --prefix
+        : $(targets)
+        : $(sources)
+        : $(properties) 
+        ;
+
+}
+
+
+actions configure
+{
+    $(XLOG[1])="$(<[2])"
+    (
+        set -e -x # Error & logging
+        cd "$(<[1]:D)"
+        : "Clean and Configure"
+        : "  From directory"
+        : "  - $(<[1]:DR=$(.CWD))"
+        :
+        : "Setup environment variables"
+        : "and execute configure script from source dir, output in current path"
+        CC="$(XTOOLSET_CC:J= )" \
+        CXX="$(XTOOLSET_CXX:J= )" \
+        LD="$(XTOOLSET_LD:J= )" \
+        AR="$(XTOOLSET_AR:J= )" \
+        NM="$(XTOOLSET_NM:J= )" \
+        RANLIB="$(XTOOLSET_RANLIB:J= )" \
+        CFLAGS="$(XTOOLSET_CFLAGS:J= )" \
+        CXXFLAGS="$(XTOOLSET_CXXFLAGS:J= )" \
+        LDFLAGS="$(XTOOLSET_LINKFLAGS:J= )" \
+        "$(>[1]:R=$(.CWD))" $(PREFIX_ARG)="$(>[3]:R=$(.CWD))" $(OPTIONS)
+  
+    ) $(XLOG[2])
+
+}

@@ -1,0 +1,81 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+
+class xpath-export-generator : xmodule-export-generator
+{
+    rule invalid-inputs ( project name ? : property-set : sources * )
+    {
+        local result ;
+
+        if ! $(sources) {
+            result = "no source" ;
+        }
+        else if $(sources[2]) {
+            result = "multiple sources" ;
+        }
+        else  {
+            result = [ invalid-inputs-ex $(sources) : $(name) ] ;
+        }
+
+        return $(result) ;
+    }
+
+    rule generated-targets ( xmpath : property-set : project name ? )
+    {
+        return  [ export-property-set $(xmpath) ]
+                [ virtual-target.register
+                  [ new xmodule-xpath-target
+                      [ export-names $(xmpath) $(property-set) "?" xpath ]
+                    : XPATH
+                    : $(project)
+                    : [ export-path-action $(xmpath)
+                        : $(property-set) ]
+                    : [ $(xmpath).xroot ] $(xmpath)
+                ] ] ;
+    }
+}
+
+
+rule register-xpath-generators ( )
+{
+
+    local rule replace-type ( type derived source )
+    {
+        return [ regex.replace $(source) $(type) $(derived) ] ;
+    }
+
+    local rule register ( type : sources * ) {
+        local derived = [ type.all-derived $(type) ] ;
+        for local t in $(derived) {
+            generators.register 
+                [ new xpath-export-generator
+                         xmodule.$(t:L)-xpath
+                       : [ sequence.transform 
+                              replace-type $(type) $(t)
+                            : $(sources) ]
+                       : : XPATH
+                ] ;
+            # override the 'base'
+            if $(t) != $(type) {
+                generators.override xmodule.$(t:L)-xpath 
+                                  : xmodule.$(type:L)-xpath ;
+            }
+        }
+    }
+
+    # use rules to describe non-overlapping 'space'
+    register XDIST  :  XDIST+ !XBUILD           ;
+    register XBUILD : !XDIST+  XBUILD+          ;
+    register XREPO  :                    XREPO+ ;
+
+
+    # only main xpath targets can be created from a RSRC
+    generators.register [ new xpath-export-generator
+                                 xmodule.xrsrc-xpath
+                               : XRSRC : : XPATH
+                               : <main-target-type>XPATH ] ;
+}
+

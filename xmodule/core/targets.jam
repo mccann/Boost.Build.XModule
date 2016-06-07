@@ -1,0 +1,286 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+#################################
+##  main target rules
+##################################
+
+import targets ;
+import project ;
+import set ;
+import regex ;
+
+
+
+# support no name syntax, useful for inline targets:
+#     " xmodule : package/configure ; "
+#     " xmodule : [ xconfigure : package/buildconf : <xm-buildconf>arg1 ] ; "
+#     " xmodule name : package/configure ; "
+#     " lib foo : [ xmodule : foo1.1/configure ] : <xpath>lib ;
+
+local rule compose-empty-target-name ( rule-name : name * : sources * )
+{
+    # if name not set, try to extract from source name
+    if ! $(name) {
+        if ! $(sources) || $(sources[2]) {
+            import errors ;
+            errors.error
+                "Unnamed $(rule-name) with zero or multiple source(s)"
+              : " -- Unamed $(rule-name) targets require one source"
+              : "sources: " '$(sources)'
+              ;
+        }
+
+        name = $(sources) ;
+        if [ class.is-instance $(sources) ] {
+           name = [ $(sources).name ] ;
+        }
+
+        # handle project-reference
+        local m = [ MATCH ^(.*)//(.*)$ : $(name) ] ;
+        if $(m) {
+            name = $(m:J=/) ;
+        }
+
+        # replace runs of non-filename, etc chars with _
+        name = [ regex.replace $(name) [^a-zA-Z_-]+ _ ] ;
+
+        # prepend rulename as path
+        # avoids name collisions due to
+        # suffix collapse with inline rules
+        name = $(rule-name)/$(name) ;
+
+#         echo composing empty name $(name) ;
+    }
+
+    return $(name) ;
+}
+
+local rule constrained-requirement ( rule-name feature constraint
+                                   : requirements * )
+{
+    local result = [ MATCH ^<$(feature)>(.*)$ : $(requirements) ] ;
+
+    if $(constraint) = "?" {
+        if $(result[2]) {
+            errors.user-error
+                "In rule '$(rule-name)'"
+              : "multiple <$(feature)> requirements found"
+              : "At most one per rule" ;
+        }
+    }
+    else if $(constraint) = "!" {
+        if $(result) {
+            errors.user-error
+                "In rule '$(rule-name)'"
+              : "<$(feature)> requirement found"
+              : "Not permitted with this rule" ;
+        }
+    }
+    return $(result) ;
+}
+
+
+class xurl-target : basic-target
+{
+    import type ;
+    import errors ;
+    import xmodule : url-handler url-handler-types ;
+    import generators ;
+
+    rule construct ( name : sources * : property-set )
+    {
+        local url     = [ $(property-set).get <xurl> ] ;
+        local handler = [ $(property-set).get <xurl-handler> ] ;
+        
+        if $(url) {
+            if ! $(handler) {
+                handler = [ url-handler $(url) ] ;
+                local from-url-handler = true ;
+                # url needs a handler
+                if ! $(handler) {
+                    errors.user-error 
+                              "No url-handler for given url"
+                            : ""
+                            : <xurl>$(url)
+                            ;
+                }
+            }
+
+
+            local handler-types = [ url-handler-types $(handler) ] ;
+
+            local url-target    = [ virtual-target.register
+                                    [ new typed-notfile-target $(url)
+                                        : $(handler-types[1])
+                                        : $(self.project) ] ] ;
+
+            
+            if $(handler-types[2])  
+            {
+                return  [ generators.construct $(self.project) $(name)
+                            : $(handler-types[2])
+                            : $(property-set)
+                            : $(url-target) ] ;
+            }
+            else {
+                return  [ property-set.empty ]
+                        $(url-target) ;
+            }
+        }
+    }
+}
+
+local rule xurl-filter ( name ? : rule-name : project : sources * : requirements * )
+{
+    constrained-requirement $(rule-name) xurl         "?" : $(requirements) ;
+
+    local xurls ;
+    local rule construct-xurl ( url ) {
+        
+        local url-name = $(name) xurl [ truncate-str [ MD5 $(url) ] ] ;
+        url-name = $(url-name:J=-) ;
+
+        xurls  += [ targets.create-metatarget xurl-target
+                    : $(project) : $(url-name)
+                    : : <xurl>$(url) $(requirements)
+                  ] ;
+    }
+
+    # filter requirements
+    local filtered-requirements ;
+
+    #create from reqs?
+    {
+        local xurl = [ MATCH ^(<xurl>.+)$ : $(requirements) ] ;
+        if $(xurl) {
+            construct-xurl $(xurl:G=) ;
+            filtered-requirements = [ set.difference $(requirements)
+                                      : $(xurl) ] ;
+        }
+    }
+    filtered-requirements ?= $(requirements) ;
+
+    # transform/filter sources
+    local rule match-xurl ( source ) {
+        if $(source:G) {
+            errors.user-error
+                 "In rule $(rule-name), requirement in sources!"
+               : "sources:" $(sources)
+               : "requirements:" $(requirements)
+               ;
+        }
+        local parts = [ parse-url $(source) ] ;
+        if $(parts[1]) {
+            if $(xurls) {
+                errors.user-error
+                     "In rule $(rule-name)"
+                   : "xurl in sources and requirements!"
+                   : "sources:" $(sources)
+                   : "requirements:" $(requirements)
+                   ;
+            }
+            construct-xurl $(source) ;
+            source = ;
+        }
+        return $(source) ;
+    }
+    local sources  = [ sequence.transform match-xurl : $(sources) ] ;
+
+    if $(xurls[2]) {
+        errors.user-error
+             "In rule $(rule-name)"
+           : "multiple xurl sources found"
+           : "sources:" $(sources)
+           : "requirements:" $(requirements)
+           ;
+    }
+
+    if $(xurls) {
+        return  <src>$(xurls)
+                <src>$(sources)
+                <req>$(filtered-requirements) ;
+    }
+}
+
+
+# custom typed-target class to make full-name work for xmodule-projects
+class xmodule-typed-target : typed-target
+{
+    # Returns a user-readable name for this target .. including the "project"
+    rule full-name ( )
+    {
+        local location ;
+        if [ class.is-a $(self.project) : xmodule-project-target ] {
+            location = [ $(self.project).virtual-location ] ;
+            location = $(location)/ ; # extra slash for "project" reference
+        } else {
+            location = [ $(self.project).location ] ;
+        }
+        return "$(location)/$(self.name) ($(self.type))" ;
+    }
+}
+
+
+# like targets.jam, only creates xmodule-typed-target
+rule create-xmodule-typed-target ( type : project : name : sources *
+        : requirements * : default-build * : usage-requirements * )
+{
+    return  [ targets.main-target-alternative
+        [ new xmodule-typed-target $(name) : $(project) : $(type)
+        : [ targets.main-target-sources $(sources) : $(name)                ]
+        : [ targets.main-target-requirements $(requirements) : $(project)   ]
+        : [ targets.main-target-default-build $(default-build) : $(project) ]
+        : [ targets.main-target-usage-requirements $(usage-requirements) :
+          $(project) ]
+        ]
+    ] ;
+}
+
+
+##################################################################
+##
+##  overload 'targets.main-target-sources' to pick up xURL objects
+##
+##################################################################
+
+# move targets.main-target-sources into this module as local rule
+IMPORT targets : main-target-sources : $(__name__) : targets-main-target-sources ;
+
+rule main-target-sources ( sources * : main-target-name : no-renaming ? )
+{
+    local project = [ project.current ] ;
+
+    local rule url-to-target ( source )
+    {
+        local parts = [ parse-url $(source) ] ;
+        if $(parts[1]) {
+            local name = $(main-target-name) xurl [ truncate-str [ MD5 $(source) ] ] ;
+            name = $(name:J=-) ;
+
+            return  [ targets.create-metatarget 
+                          xurl-target
+                        : $(project) : $(name)
+                        : : <xurl>$(source)
+                    ] ;            
+        }
+        else {
+            return $(source) ;
+        }
+    }
+    
+    # filter sources and call original function
+    return  [ targets-main-target-sources 
+                [ sequence.transform url-to-target : $(sources) ]
+            :   $(main-target-name)
+            :   $(no-renaming) 
+            ] ;
+
+}
+
+# replace original targets.main-target-sources with new version .. and re-export
+IMPORT $(__name__) : main-target-sources : targets : main-target-sources ;
+EXPORT targets : main-target-sources ;
+

@@ -1,0 +1,81 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+
+class xmodule-workspace-path-target : typed-path-target
+{
+    import xmodule ;
+    import errors ;
+
+    rule properties ( )
+    {
+        return [ $(self.action).properties ] ;
+    }
+
+    rule refine ( property-set )
+    {
+        local p = [ $(self.action).properties ] ;
+        return [ $(p).refine $(property-set) ] ;
+    }
+
+    # pass default-location to allow creation
+    rule xroot ( type : default-location ? )
+    {
+        if ! $(.xroot.$(type)) {
+            .xroot.$(type) = [ xmodule.construct-xroot
+                                 $(self.project) $(self.path:D=)
+                               : $(type) : [ properties ] : $(__name__)
+                               : $(default-location) ] ;
+        }
+
+        return $(.xroot.$(type)) ;
+    }
+
+    # create an abs 'un-typed' xroot 
+    rule abs-xroot ( path ) 
+    {
+        if ! $(.abs-xroot.$(path)) {
+            .abs-xroot.$(path) =  [ xmodule.construct-xroot $(self.project) 
+                                    : $(path) : [ properties ] : $(__name__) ] ;
+        }
+
+        return $(.abs-xroot.$(path)) ;
+    }
+}
+
+
+
+rule construct-workspace ( project default-name : property-set : sources * )
+{
+    local rule target-path ( )
+    {
+        # use <xworkspace> as name, if present
+        local xname = [ $(property-set).get <xworkspace> ] ;
+        assert.equal : $(name[2]) ; # should be at most one <xworkspace>
+        
+        # default to 'default-name'
+        xname ?= $(default-name) ;
+
+        # get base-path
+        local tp = [ $(property-set).target-path ] ;
+        if $(tp[2]) {
+            tp = [ $(project).build-dir ] $(tp[1]) ;
+        }
+
+        return  [ path.native 
+                    [ path.make  
+                        [ path.join $(tp) $(xname) ] ] ] ;
+    }
+
+    return  [ virtual-target.register
+              [ new xmodule-workspace-path-target [ target-path ] 
+                    : XWORKSPACE
+                    : $(project)
+                    : [ new non-scanning-action $(sources)
+                            :  xmodule.no-action : $(property-set) ]
+                    : make-path
+            ] ] ;
+
+}

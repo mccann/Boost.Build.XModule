@@ -1,0 +1,35 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+class xrsrc-export-generator : xmodule-export-generator
+{
+    rule generated-targets ( xmpath : property-set : project name ? )
+    {
+        return  [ export-property-set $(xmpath) ]
+                [ virtual-target.register
+                    [ new xmodule-rsrc-target
+                        [ path.relative
+                            [ export-names $(xmpath) $(property-set) "." ]
+                            [ $(xmpath).xroot-path ] ]
+                      : XRSRC
+                      : $(project)
+                      : [ new non-scanning-action [ $(xmpath).xmodule ]
+                          : xmodule.no-action ]
+                      : [ $(xmpath).xroot ] $(xmpath)
+                ]   ] ;
+
+    }
+}
+
+
+rule register-xrsrc-generators ( )
+{
+        generators.register [ new xrsrc-export-generator
+                                     xmodule.xpath-xrsrc
+                                   : XPATH+ : : XRSRC
+                            ] ;
+}
+
+

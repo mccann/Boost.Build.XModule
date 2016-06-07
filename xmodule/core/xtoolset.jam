@@ -1,0 +1,419 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+local rule xtoolset-cache ( action : property-set )
+{
+    # many differerent property-set could have the same 'toolset-ps'
+    local toolset-cache = .xtoolset-property-set.$(property-set) ;
+    if ! $($(toolset-cache)) {
+        $(toolset-cache) =  [ property-set.create 
+                                [ MATCH ^(<toolset.*)$ 
+                                    : [ $(property-set).raw ] ] ] ;
+    }
+    local toolset-ps = $($(toolset-cache)) ;
+
+    local cache = .xtoolset-cache.$(action).$(toolset-ps).vars ;
+    if ! $($(cache)) {
+
+        $(cache) = $(cache) ;
+
+        local toolset = [ $(toolset-ps).get <toolset> ] ;
+        if ! $(toolset) {
+            xmodule.basic-generator-error "missing <toolset>" : $(targets) ;
+        }
+
+        XTOOLSET         on $(cache) = $(toolset) ; 
+        XTOOLSET_VERSION on $(cache) = [ $(property-set).get 
+                                         <toolset-$(toolset):version> ] ;
+
+        # set toolset variables on fake target 'cache'
+        toolset.set-target-variables 
+                $(toolset).$(action) 
+                $(cache) 
+            :   $(toolset-ps) ;
+
+    }
+
+    return $(cache) ;
+}
+
+
+###############################
+# rule xtoolset-action-var ( action : var : property-set )
+#
+#      return the value of 'var' that the toolset in property-set would
+#      have for the given action
+#
+
+rule xtoolset-action-var ( action : var : property-set )
+{
+    return [ on [ xtoolset-cache $(action) : $(property-set) ] 
+                return $($(var)) ] ;
+}
+
+###############################
+# rule xtoolset-config
+#
+#      for given 'config' item, return its value for the toolset in properties
+# 
+#       'config' items are enumerated below
+#
+
+.xtoolset-config.items = 
+    cc       
+    cxx
+    ar
+    nm
+    ld
+    ranlib
+    cflags 
+    cxxflags
+    linkflags
+    toolset  
+    version
+;
+
+.xtoolset-config.action-var.cc           = compile.c    CONFIG_COMMAND cc-tool ;
+.xtoolset-config.action-var.cflags       = compile.c    OPTIONS        ;
+.xtoolset-config.action-var.cxx          = compile.c++  CONFIG_COMMAND ;
+.xtoolset-config.action-var.cxxflags     = compile.c++  OPTIONS        ;
+.xtoolset-config.action-var.ar           = archive      .AR            ;
+.xtoolset-config.action-var.ranlib       = archive      .RANLIB        ;
+.xtoolset-config.action-var.nm           = archive      .AR            nm-tool ;
+.xtoolset-config.action-var.ld           = link         CONFIG_COMMAND ld-tool ;
+.xtoolset-config.action-var.linkflags    = link         OPTIONS        ;
+
+# not really set by native toolset
+.xtoolset-config.action-var.toolset      = archive      XTOOLSET         ; 
+.xtoolset-config.action-var.version      = archive      XTOOLSET_VERSION ; 
+
+rule xtoolset-config ( config : property-set )
+{
+    local action-var = $(.xtoolset-config.action-var.$(config)) ;
+    if $(action-var) {
+        local result =  [ xtoolset-action-var    
+                            $(action-var[1]) 
+                        : $(action-var[2]) 
+                        : $(property-set) ] ;
+
+        if $(action-var[3]) {
+            return [ $(action-var[3]) $(result) : $(property-set) ] ; 
+        }
+        else {
+            return $(result) ;
+        }
+    }
+    else {
+        import errors ;
+        errors.error "unknown / unmapped config:" $(feature:E=) ;
+    }
+}   
+
+## CC needs to NOT be a C++ compiler for cmake/other tools
+rule cc-tool ( results * : property-set ) 
+{
+    return  [ regex.replace-list 
+                [ regex.replace-list $(results)
+                    : clang\\+\\+$ 
+                    : clang 
+                ]
+            : \\+\\+ 
+            : cc 
+            ] ;
+}
+
+## Need to discover the actual linker given the 'command'
+rule ld-tool ( results * : property-set )
+{
+    local key = .ld-tool.$(results:J=.) ;
+    if ! $($(key)) 
+    {
+        # need flags!
+        results += [ xtoolset-config linkflags : $(property-set) ] ; 
+
+        # add print-prog-name
+        results += -print-prog-name=ld ;
+
+        $(key) = [ SHELL $(results:J=" ") : strip-eol ] ;
+    }
+    return $($(key)) ;
+}
+
+## need to discover the actual nm command, infer from 'ar'
+rule nm-tool ( ar ? : property-set )
+{
+    local key = .nm-tool.$(ar:E=) ;
+    if ! $($(key)) 
+    {
+        # AR has prefix/postfix?
+        local m = [ MATCH ^(.*)ar(.*)$ : $(ar:D=) ] ;
+        if $(m) && [ CHECK_IF_FILE $(ar:D)/$(m[1]:E=)nm$(m[2]:E=) ] {
+            $(key) = $(ar:D)/$(m[1]:E=)nm$(m[2]:E=) ;
+        }
+        else {
+            $(key) = <> ;
+        }
+    }
+    if $($(key)) != <> {
+        return $($(key)) ;
+    }
+}
+
+##################################################################
+# rule  xtoolset-filter-items ( property-set, ... ) 
+#
+#       - <xtoolset-inherit> will explcitly permit a config value,
+#                            even if forfeit
+#
+#       - <xtoolset-forfeit> will give up a config value
+#
+
+
+rule xtoolset-filter-items 
+     ( property-set  
+     : xtoolset-inherit *    # caller explictly makes these used
+     : xtoolset-forfeit *    # caller defaults these to unused
+     ) 
+{
+    local config-items = $(.xtoolset-config.items) ;
+
+    local rule filter ( feature : patterns * )
+    {
+        local result ;
+        patterns += [ $(property-set).get $(feature) ] ;
+        if $(patterns) {
+            result += [ MATCH ^($(patterns))$ : $(config-items) ] ;
+        }
+        return $(result) ;
+    }
+
+    local inherit = [ filter <xtoolset-inherit>  : $(xtoolset-inherit) ] ;
+    local forfeit = [ filter <xtoolset-forfeit>  : $(xtoolset-forfeit) ] ;
+  
+    if $(forfeit) {
+        config-items = [ set.difference $(config-items) : $(forfeit) ] ;
+        for local item in $(inherit) {
+            if ! $(item) in $(config-items) {
+                config-items += $(item) ;
+            }
+        }
+    }
+    
+    return $(config-items) ;
+}
+
+##################################################################
+# rule  xtoolset-config-items-on-targets  ( .... )
+#
+#       set the apropriate config-item variables on the targets
+#       given the property-set
+#    
+#       XTOOLSET_<CONFIG-ITEM> variable will be set
+#
+
+rule xtoolset-config-items-on-targets   ( targets * 
+                                        : config-items * 
+                                        : property-set 
+                                        )
+{
+    for local item in $(config-items) {
+        XTOOLSET_$(item:U) on $(targets) = [ xtoolset-config $(item) 
+                                            : $(property-set) ] ;
+    }
+}
+
+
+
+##################################################################
+# rule  xtoolset-config-targets ( targets * : properties * )
+#
+#       set XTOOLSET_ variables on targets from properties
+#        - <xtoolset-inherit|forfeit> features control which variables are set
+#
+rule xtoolset-config-targets ( targets * : properties * )
+{
+    local ps = [ property-set.create $(properties) ] ;
+
+    xtoolset-config-items-on-targets  $(targets) 
+                                    : [ xtoolset-filter-items $(ps) ]  
+                                    : $(ps) ;
+
+
+    # <xtoolset-xxxxxxx> feature options 
+    local xtoolset-options = [ MATCH ^<(xtoolset-[a-z]+)>(.*)$ : $(properties) ] ;
+    while $(xtoolset-options) {
+        local var =  [ regex.split $(xtoolset-options[1]:U) "-" ] ;
+        var = $(var:J=_) ;
+        $(var) on $(targets) += $(xtoolset-options[2]) ;
+        xtoolset-options = $(xtoolset-options[3-]) ;
+    }
+
+
+    # semi-workaround CMAKE's assumption that CC/CXX are just "a b" pattern, no flags
+    # see xtoolset-fixup-cmd-flags for more info
+    #
+    xtoolset-fixup-cmd-flags $(targets) : CC   CFLAGS   ;
+    xtoolset-fixup-cmd-flags $(targets) : CXX  CXXFLAGS ;
+
+}
+
+
+
+
+
+##################################################################
+# rule  xtoolset-fixup-cmd-flags ( targets * : cmd flags )
+#
+#       set XTOOLSET_ variables on targets from properties
+#        - <xtoolset-inherit|forfeit> features control which variables are set
+#
+#   some configur scripts, most certainly opencv's cmake
+#   assume that CC/CXX are just "a b" pattern, no flags
+#   this will split current XTOOLSET_[CC/CXX] into parts before " -" and after
+#   assumption being that this split will satisfy CMAKE's concerns, and that the first
+#   non-executable token in the list is a flag
+
+rule xtoolset-fixup-cmd-flags ( targets * : cmd flags ) 
+{
+    local cmd-values = [ on $(targets) return $(XTOOLSET_$(cmd)) ] ;
+    local found-flag = ;
+    local cmd-parts = ;
+    local flag-parts = ;
+    local link-flags = ;
+    for local value in $(cmd-values) {
+        if $(found-flag) || [ MATCH ^(-.*)$ : $(value) ] {
+            found-flag = true ;
+            local link-flag = [ MATCH ^-Wl,(.*)$ : $(value) ] ;
+            if $(link-flag) {
+                link-flags += $(link-flag) ;
+            }
+            else {
+                flag-parts = $(value) ;
+            }
+        }
+        else {
+            cmd-parts += $(value) ;
+        }
+    }
+
+    if $(found-flag) {
+        local cmd-flags-value = [ on $(targets) return $(XTOOLSET_$(flags))  ] ;
+        local lnk-flags-value = [ on $(targets) return $(XTOOLSET_LINKFLAGS) ] ;
+        XTOOLSET_$(cmd)   on $(targets) = $(cmd-parts) ;
+        if $(flag-parts) {
+            XTOOLSET_$(flags)  on $(targets) = $(flag-parts) $(cmd-flags-value) ;
+        }
+        if $(link-flags) {
+            XTOOLSET_LINKFLAGS on $(targets) = $(link-parts) $(lnk-flags-value) ;
+        }
+    }
+}
+
+
+
+rule __test__xtoolset ( )
+
+{
+
+    import assert ;
+    import property-set ;
+   
+    module fakegcc {
+
+        import feature ;
+        import toolset ;
+        import common ;
+
+        feature.extend toolset : fakegcc ;
+
+        toolset.inherit-rules fakegcc : gcc ;
+        toolset.inherit-flags fakegcc : gcc ;
+
+        rule init ( version ? : command * : options * )
+        {
+            common.check-init-parameters fakegcc  : version $(version) ;
+            common.handle-options fakegcc : : $(command) : $(options) ;
+
+            toolset.flags fakegcc.archive .AR  : fake-ar ;
+            toolset.flags fakegcc.archive .RANLIB  : fake-ranlib ;
+        }
+
+    }
+
+    
+    IMPORT fakegcc : init : $(__name__) : fakegcc.init ;
+
+    local cmd = cc  -fuse-ld=gold ;
+    local all = -Dall ;
+    fakegcc.toolset   = fakegcc   ;
+    fakegcc.version   = most-fake ;
+    fakegcc.cc        = $(cmd) ;
+    fakegcc.cxx       = $(cmd) ;
+    fakegcc.ar        = fake-ar ;
+    fakegcc.ranlib    = fake-ranlib ;
+    fakegcc.cflags    = $(all) -Dcflags ;
+    fakegcc.cxxflags  = $(all) -Dcxxflags ;
+    fakegcc.linkflags = -Wl,--verbose ;
+
+    fakegcc.ld        = ld ;
+    fakegcc-regex.ld  = .*(ld) ;
+    
+    fakegcc-empty    += nm ;
+
+    fakegcc.init  $(fakegcc.version) 
+                : $(cmd)
+                : <compileflags>$(all)
+                  <cflags>-Dcflags
+                  <cxxflags>-Dcxxflags
+                  <linkflags>-Wl,--verbose
+                ;
+
+
+ 
+    # add some USER_OPTIONS that should NOT get selected
+    local ps    = [ property-set.create <toolset>fakegcc
+                                        <link>shared 
+                                        <cflags>MOO 
+                                        <cxxflags>MOO++ 
+                                        <linkflags>COW  ] ;
+
+    ps = [ $(ps).add-defaults ] ;
+  
+    
+    for local item in [ modules.peek xmodule : .xtoolset-config.items ] 
+    {
+        echo testing $(item) ;
+        # one of these tests should be set
+        
+
+        local result = [ xtoolset-config $(item) : $(ps) ] ;  
+        if  $(fakegcc-regex.$(item)) {
+            result = [ MATCH ^$(fakegcc-regex.$(item))$ 
+                        : $(result) ] ;
+        }
+        
+        if $(item) in $(fakegcc-empty) { 
+            assert.set-equal : $(result) ;
+        }
+        else {
+            assert.not-equal : $(fakegcc.$(item)) ;
+            assert.set-equal $(fakegcc.$(item))  : $(result) ;
+        }
+    }
+
+    local rule xps ( inherit * : forfeit * ) {
+        return [ property-set.create <xtoolset-inherit>$(inherit) 
+                                     <xtoolset-forfeit>$(forfeit) ] ;
+    }
+
+    assert.set-equal cxx : [ xtoolset-filter-items [ xps ] : cxx : .* ] ;
+    assert.set-equal cxx : [ xtoolset-filter-items [ xps cxx ] : : .* ] ;
+    assert.set-equal cxx : [ xtoolset-filter-items [ xps cxx : .* ] ] ;
+    assert.set-equal     : [ xtoolset-filter-items [ xps : .* ] ] ;
+
+    assert.set-equal cc cxx : [ xtoolset-filter-items [ xps cc|cxx : .* ] ] ;
+    assert.set-equal cc cxx : [ xtoolset-filter-items [ xps cc cxx : .* ] ] ;
+
+}

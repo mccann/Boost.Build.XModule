@@ -1,0 +1,91 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+##################################################################
+##
+##   core xmodule types
+##
+##################################################################
+
+## basic type that represents a generated file-tree ;
+type.register XMODULE ;
+
+## xmodule types
+type.register XBUILD  : : XMODULE ; # build targets, no installation
+type.register XDIST   : : XMODULE ; # install built targets (from XBUILD)
+type.register XREPO   : : XMODULE ; # copy repository from elsewhere
+type.register XPATH   : : XMODULE ; # path inside an existing XMODULE
+type.register XRSRC   : : XMODULE ; # resource-locator inside XMODULE
+
+
+## where xmodule's  state/log/etc files go
+type.register XWORKSPACE   ;
+
+## where an xmodule's files are staged
+type.register XROOT        ;
+
+## resource-locator inside an existing XMODULE ;
+
+## xmodule exports
+type.register XINCLUDE :  : H   ;
+type.register XFILE    :        ;
+type.register XLIB     :  : LIB ;
+
+## misc support types
+type.register XSRCHASH   ;
+
+
+##################################################################
+##
+##    overload 'type.type' for detection of type from filename
+##
+##################################################################
+
+# move type.type into this module as local rule type-type
+IMPORT type : type : $(__name__) : type-type ;
+
+rule type ( filename )
+{
+    # try by filename first
+    local result = $(.file.type.$(filename:D=)) ;
+
+    # if that didn't work, try original rule
+    if ! $(result) {
+        result = [ type-type $(filename) ] ;
+    }
+    return $(result) ;
+}
+
+# replace original type.type with new version .. and re-export
+IMPORT $(__name__) : type : type : type ;
+EXPORT type : type ;
+
+
+##################################################################
+##
+##    register-filenames
+##
+##    register whole filenames for 'type.type' detection
+##
+##################################################################
+rule register-filenames ( filenames + : type )
+{
+    for local f in $(filenames) {
+        if $(f:D) {
+            import errors ;
+            errors.error Attempting to specify filename with a path
+                \"$(f)\" : "Type $(type)" ;
+        }
+        if ! $(.type.file.$(f)) {
+            .file.type.$(f) = $(type) ;
+        }
+        else if $(.file.type.$(f)) != $(type)
+        {
+            import errors ;
+            errors.error Attempting to specify multiple types for filename
+                \"$(f)\" : "Old type $(.file.type.$(f)), New type $(type)" ;
+        }
+    }
+}

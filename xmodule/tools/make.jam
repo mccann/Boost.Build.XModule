@@ -1,0 +1,445 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+##################################################################
+##  build external sources with 'make'
+##################################################################
+
+# see doc/make.md for documentation of properties
+
+import type ;
+import "class" : new ;
+import feature ;
+import generators ;
+import toolset ;
+import build-jobs-arg ;
+import path ;
+import xmodule ;
+import indirect ;
+
+# register 'make' XMAKEFILE type
+type.register XMAKEFILE ;
+type.register XMAKEFILE_SRC : : XMAKEFILE ;
+type.register XMAKEFILE_EXO : : XMAKEFILE ;
+
+# xmake versions of XBUILD/XDIST
+type.register XMAKE_SRC_BUILD   : : XBUILD   ; 
+type.register XMAKE_EXO_BUILD   : : XBUILD   ; 
+type.register XMAKE_DIST        : : XDIST    ; 
+
+
+feature.feature xmake-env : : free incidental ;
+
+
+# register filenames associated with XMAKEFILE
+xmodule.register-filenames Makefile makefile : XMAKEFILE_SRC ;
+
+xmodule.register-xmodule-rules xmakefile ;
+
+
+class xmake-workspace-generator : xmodule-generator
+{
+    import xmodule  : refine-source-file-hash-dependencies
+                      construct-workspace 
+                    ;
+
+
+    rule construct-xmake-workspace ( source : property-set : project name )
+    {
+        # construct workspace
+        return  [ construct-workspace $(project) $(name)
+                  : 
+                    # by default, workspace is highly variant
+                    [ xvariant-ps 
+                        [ refine-source-file-hash-dependencies
+                            $(property-set) $(project) $(name) 
+                          : $(source) 
+                        ] 
+                    ] 
+                  : $(source) 
+                ] ;
+    }
+}
+
+##################################################################
+##
+##   xmake makefile generator
+##
+##################################################################
+
+class xmake-makefile-generator : xmake-workspace-generator
+{
+   
+    rule __init__ ( id : sources + : target-types * : requirements * )
+    {
+        target-types ?= XMAKEFILE_EXO ;
+
+        xmake-workspace-generator.__init__      
+               $(id) 
+            :  $(sources) 
+            :  $(target-types)
+            :  $(requirements) 
+            ;
+    }
+
+    rule invalid-inputs ( project name ? : property-set : sources * )
+    {
+        local result ;
+        if ! $(sources) {
+            result = "no source" ;
+        }
+        else if $(sources[2]) {
+            result = "multiple sources" ;
+        }
+
+        return $(result) ;
+    }
+
+
+    rule makefile-action ( sources +
+                         : workspace 
+                         : project
+                         : property-set
+                         : xvariant *
+                         )
+    {
+        return  [  new non-scanning-action $(sources) 
+                :  $(self.id) 
+                :  
+                   [  $(workspace).refine 
+                      
+                      # Refine by only the elements we care about 
+                      [  xvariant-ps $(property-set) 
+                      :  
+                         xconfig
+                         xpre-config-action
+                         xtoolset-.*
+                         $(xvariant) 
+                      : 
+                         .* 
+                      ] 
+                   ] 
+                ] ;
+    }
+
+    rule generated-targets ( source : property-set : project name ? )
+    {
+
+        local workspace = [ construct-xmake-workspace $(source) 
+                                : $(property-set) : $(project) $(name) ] ;
+
+        # construct root locations
+        local bld-root  = [ $(workspace).xroot XBUILD : build ] ;
+        local dst-root  = [ $(workspace).xroot XDIST  : local ] ;
+
+        if $(bld-root) && $(dst-root) {
+
+            # get name/path from build-location
+            local genr = [ $(source).name ] ;
+
+            local a  =  [ makefile-action $(source) $(bld-root) $(dst-root)
+                            : $(workspace)
+                            : $(project)
+                            : $(property-set)
+                        ] ;
+
+            local t1 =  [ new xmodule-workspace-file-target Makefile
+                            : XMAKEFILE_EXO 
+                            : $(workspace) : $(project)
+                            : $(a) : [ $(bld-root).path ] ] ;
+
+            local t2 =  [ new xmodule-workspace-file-target 
+                              log/$(genr:D=).configure-log
+                            : : $(workspace) : $(project)
+                            : $(a) : [ $(workspace).path ] ] ;
+            
+            # log file is not intended to be depended upon, do not return it.
+            return  [ property-set.empty ] 
+                    [ virtual-target.register $(t1) ] ;
+        }
+    }
+}
+
+rule setup-makefile-generate-action ( configure-action
+                                      prefix-arg 
+                                    : targets * 
+                                    : sources * 
+                                    : properties * 
+                                    )
+{
+    # allow config action to root paths
+    .CWD on $(targets)  = [ PWD ] ;
+
+    # Because these actions can touch the source, it needs a localized semaphore
+    JAM_SEMAPHORE on $(targets) += CONFIGURE_SEMEPHORE_$(targets[1]) ;
+  
+    # if there is no prefix set manually, allow prefix arg
+    if ! [ MATCH ^(<xconfig>$(prefix-arg)=.*)$ : $(properties) ] {
+        PREFIX_ARG on $(targets) = $(prefix-arg) ;
+    }
+
+ 
+    # clean
+    $(__name__).clean-build $(targets) : $(sources)  ;
+
+
+    # custom actions
+    for local action in [ MATCH ^<xpre-config-action>[@](.*)$ : $(properties) ] {
+        indirect.call $(action) $(targets) : $(sources) : $(properties) ;
+    }
+
+    # setup toolset
+    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
+
+    # regular options
+    OPTIONS on $(targets) = [ MATCH ^<xconfig>(.*)$ : $(properties) ] ;
+
+    # configure
+    $(configure-action) $(targets) : $(sources) : $(properties) ;
+}
+
+XLOG = [ xmodule.logfile-action ] ;
+
+actions clean-build 
+{
+    $(XLOG[1])="$(<[2]:S=.clean-log)"
+    (
+        # Error & logging
+        set -e -x 
+        : "Clean build directory"
+        : "  TODO: make option to control this, maybe: <xconfig-clean>always/no"
+        cd "$(<[1]:D)"
+        rm -vrf ./*
+      
+    ) $(XLOG[2])
+}
+
+
+##################################################################
+##
+##   xmake-build-generator 
+##
+##################################################################
+
+class xmake-build-generator : xmake-workspace-generator
+{
+    import xmodule-patch ;
+    import "class" : is-derived ;
+
+    rule generated-targets ( XMAKEFILE : property-set : project name ? )
+    {
+
+    
+        local workspace  ;
+        local bld-root   ; 
+        local build-type ;
+        {
+            # EXO build case
+            if XMAKEFILE_EXO = [ $(XMAKEFILE).type ] {
+                build-type = XMAKE_EXO_BUILD ;
+                workspace  = [ $(XMAKEFILE).workspace ] ;
+                bld-root   = [ $(workspace).xroot XBUILD ] ;
+            }
+            # SRC build case 
+            else {
+                build-type = XMAKE_SRC_BUILD ;
+
+                # if XMAKEFILE is already in a workspace
+                # OK because this is an inplace build
+                workspace  = [ construct-xmake-workspace $(XMAKEFILE) 
+                                : $(property-set) : $(project) $(name) ] ;
+                # use anon xroot
+                bld-root   = [ $(workspace).abs-xroot [ $(XMAKEFILE).path ] ] ;
+            }
+        }
+
+        
+        local build-log =   [ virtual-target.register
+                                [ new xmodule-workspace-file-target 
+                                      log/make-build.log
+                                    : : $(workspace) : $(project)
+                                    : [ new non-scanning-action 
+                                          $(XMAKEFILE) 
+                                        : xmodule-make.build
+                                        : [ $(workspace).refine    
+                                            # refine by only what makes sense for build
+                                            [ xvariant-ps $(property-set) 
+                                                : xbuild-.*
+                                                  xmake-.*
+                                                : .*
+                                      ]   ] ] 
+                                    : [ $(workspace).path ] ] ] ;
+    
+
+        local patch-targets = [ xmodule-patch.construct-targets
+                                $(bld-root)
+                                $(build-log) 
+                                $(property-set) 
+                                $(project) ] ;
+
+
+        return  [ property-set.empty ] 
+                [ virtual-target.register
+                    [ new xmodule-xmodule-final-target 
+                          $(bld-root)
+                        : $(build-log) $(patch-targets)
+                        : $(build-type) : $(project) ] ] ;
+    }
+}
+
+
+generators.register [ new xmake-build-generator xmodule-make.exo-build
+                          : XMAKEFILE_EXO : XMAKE_EXO_BUILD ] ;
+
+generators.register [ new xmake-build-generator xmodule-make.exo-xbuild
+                          : XMAKEFILE_EXO : XBUILD ] ;
+
+generators.register [ new xmake-build-generator xmodule-make.src-build
+                          : XMAKEFILE_SRC : XMAKE_SRC_BUILD ] ;
+
+generators.register [ new xmake-build-generator xmodule-make.src-xbuild
+                          : XMAKEFILE_SRC : XBUILD ] ;
+
+
+toolset.flags   $(__name__).build TARGETS
+                                : <xbuild-arg>
+                                ;
+toolset.flags   $(__name__).build DEFAULT_NUM_JOBS
+                                : [ build-jobs-arg.external-build-jobs-arg ]
+                                ;
+toolset.flags   $(__name__).build NUM_JOBS
+                                : <xbuild-jobs>
+                                ;
+toolset.flags   $(__name__).build JAM_SEMAPHORE
+                                : XMODULE-BUILD-SEMAPHORE
+                                ;
+
+rule build ( targets * : sources * : properties * )
+{
+
+    #http://stackoverflow.com/questions/2821043/allowed-characters-in-linux-environment-variable-names
+    local pairs = [ MATCH ^<xmake-env>([a-zA-Z_][a-zA-Z_0-9]*)=(.*)$ : $(properties) ] ;
+    while $(pairs) {
+        ENV_VARS on $(targets) += $(pairs[1])='$(pairs[2])' ;
+        pairs = $(pairs[3-]) ;
+    }
+}
+.NEWLINE = "\n" ;
+
+actions build
+{
+    $(XLOG[1])="$(<[1])"
+    {
+        : set env variables 
+        $(ENV_VARS)$(.NEWLINE)
+    
+        : xmake build action
+        echo make -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
+        make -C "$(>[1]:D)" -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
+
+    } $(XLOG[2])
+}
+
+##################################################################
+##
+##   xmake-dist-generator -- build 'dist' (only from XMAKE_EXO_BUILD)
+##
+##################################################################
+
+
+class xmake-dist-generator : xmodule-generator
+{
+    import xmodule-patch ;
+
+    rule generated-targets ( XMAKE_EXO_BUILD : property-set : project name ? )
+    {
+        local workspace = [ $(XMAKE_EXO_BUILD).workspace ] ;
+
+        local bld-root  = [ $(workspace).xroot XBUILD ] ;
+        local dst-root  = [ $(workspace).xroot XDIST  ] ;
+        
+        local staged-root  ;
+        if [ $(property-set).get <xdist-staged> ] = yes {
+            staged-root = $(dst-root) ;
+        }
+
+
+        local dist-log = [ virtual-target.register
+                            [ new xmodule-workspace-file-target 
+                                  log/make-install.log
+                                : : $(workspace) : $(project)
+                                : [ new non-scanning-action 
+                                          $(bld-root) 
+                                          $(XMAKE_EXO_BUILD) 
+                                          $(staged-root) 
+                                        : xmodule-make.install
+                                        : [ $(workspace).refine    
+                                            # refine by only what makes sense 
+                                            [ xvariant-ps $(property-set) 
+                                                : xdist-.*
+                                                : .*
+                                  ]       ] ] 
+                                : [ $(workspace).path ] ] ] ;
+        
+        local patch-targets = [ xmodule-patch.construct-targets 
+                                $(dst-root)
+                                $(dist-log) 
+                                $(property-set) 
+                                $(project) ] ;
+
+        return  [ property-set.empty ] 
+                [ virtual-target.register
+                    [ new xmodule-xmodule-final-target 
+                          $(dst-root) 
+                        : $(dist-log) $(patch-targets)
+                        : XMAKE_DIST : $(project) ] ] ;
+    }
+}
+
+generators.register [ new xmake-dist-generator xmodule-make.install 
+                            : XMAKE_EXO_BUILD : XMAKE_DIST ] ;
+
+generators.register [ new xmake-dist-generator xmodule-make.xdist 
+                            : XMAKE_EXO_BUILD : XDIST ] ;
+
+toolset.flags   $(__name__).install TARGETS : <xdist-arg> ;
+
+rule install ( targets * : sources * : properties * )
+{
+    local j = [ MATCH ^<xdist-jobs>([0-9]+|%default%)$ 
+                        : $(properties) ] ;
+    j = $(j[1]) ;
+
+    if $(j) = %default% {
+        j = [ build-jobs-arg.external-build-jobs-arg ] ;
+    }
+
+    XDIST_JOBS on $(targets) = $(j) ;
+
+    if $(j) && $(j) != 1 {  
+        JAM_SEMAPHORE on $(targets) = XMODULE-BUILD-SEMAPHORE ;
+    }
+}
+
+.CWD = [ PWD ] ;
+.SPACE = " " ;
+
+actions install
+{
+    $(XLOG[1])="$(<[1])"
+    {
+        : xmake install action
+        echo make -j$(.SPACE)$(XDIST_JOBS) "$(TARGETS:E=install)"
+        make DESTDIR="$(>[3]:R=$(.CWD))" -C "$(>[1])" -j$(.SPACE)$(XDIST_JOBS)  "$(TARGETS:E=install)"
+        
+    } $(XLOG[2])
+
+}
+
+
+
+
+
+

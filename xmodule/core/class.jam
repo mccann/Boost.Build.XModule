@@ -1,0 +1,29 @@
+# return 'backtrace' of class modules
+rule object-stack ( )
+{
+    local modules ;
+
+    local bt = [ BACKTRACE ] ;
+    while $(bt) {
+        modules += $(bt[3]) ;
+        bt = $(bt[5-]) ;
+    }
+
+    # backtrace leaves a trailing '.' on module names
+    #  - remove that, and filter out non 'object(...)@123' modules
+    return [ MATCH ^(object\\(.*\\)@[1-9][0-9]*).?$ : $(modules) ] ;
+}
+
+
+# go up stack and find first instance (direct or derived) of class-type
+rule caller-instance-of-class ( class-type )
+{
+    local result ;
+    for local m in [ object-stack ] {
+        if ! $(result) && [ class.is-a $(m) : $(class-type) ] {
+            result = $(m) ;
+            return $(result) ;
+        }
+    }
+    return $(result) ;
+}

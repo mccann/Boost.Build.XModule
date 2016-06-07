@@ -1,0 +1,82 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+class xmodule-root-target : typed-path-target
+{
+    import assert ;
+    rule workspace ( )
+    {
+        if ! $(self.workspace) {
+            self.workspace = [ $(self.action).sources ] ;
+            assert.true type.is-derived [ $(self.workspace).type ] XWORKSPACE ;
+        }
+        return $(self.workspace) ;
+    }
+}
+
+
+
+rule construct-xroot    ( project name ? : type-or-abspath : property-set
+                        : workspace 
+                        : default-location ? 
+                        )
+{
+    assert.true type.is-derived [ $(workspace).type ] XWORKSPACE ;
+
+
+    local location  ;
+    local make-path ;    
+    if ! $(default-location) {
+        location = $(type-or-abspath) ;
+    }
+
+    # default or property
+    else {
+
+        #TODO: test user control of 'location'
+
+        # permit control of location
+        # <{rulename}-location> path to where repository directory will be made
+        #                       relative to declaring project
+        #                       if location is not specified,
+        #                       the repository will be in a subdir of buildir
+
+
+        # rulename from type
+        local rulename = [ type.type-to-rule-name $(type-or-abspath) ] ;
+
+        # location defaults to workspace
+        location = [ $(workspace).path ] ;
+
+        # location explicitly set?
+        {
+            local loc = [ $(property-set).get <$(rulename)-location> ] ;
+            if $(loc) {
+                location = [ path.root $(loc) [ $(project).location ] ] ;
+
+                # location ends with target name
+                location += $(name) ;
+            }
+            else {
+                # location ends with default loc (name is probably in workspace)
+                location += $(default-location) ;
+            }
+        }
+
+        make-path = make-path ;
+    }
+
+    return  [ virtual-target.register
+                [ new xmodule-root-target
+                    [ path.native 
+                        [ path.make 
+                            [ path.join $(location) ] ] ]
+                  : XROOT
+                  : $(project)
+                  : [ new non-scanning-action $(workspace)
+                      : xmodule.export-path : $(property-set) ]
+                  : $(make-path) ] ] ;
+}
+
+

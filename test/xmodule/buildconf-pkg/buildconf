@@ -1,0 +1,5 @@
+#!/bin/bash
+
+echo options: "$@"
+cat ../configure-pkg/configure | sed 's/\$buildconf_args/$*/g' > configure
+chmod +x configure

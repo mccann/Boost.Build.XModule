@@ -1,0 +1,94 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+
+##################################################################
+## This module supports the 'xm' External Module build system
+##   - responsible for configuring the external module with 'cmake'
+##################################################################
+
+import type ;
+import toolset ;
+import xmodule ;
+import xmodule-make ;
+import "class" : new ;
+import generators ;
+
+##################################################################
+##
+##   xcmake makefile generator
+##
+##################################################################
+
+type.register XCMAKE ;
+
+xmodule.register-filenames CMakeLists.txt : XCMAKE ;
+
+generators.register [ new xmake-makefile-generator 
+                            xmodule-cmake.cmake-configure
+                          : XCMAKE 
+                    ] ;
+
+generators.register [ new xmake-makefile-generator 
+                            xmodule-cmake.cmake-configure
+                          : XCMAKE 
+                          : XMAKEFILE
+                    ] ;
+
+
+rule cmake-configure ( targets * : sources * : properties * )
+{
+    xmodule-make.setup-makefile-generate-action 
+          $(__name__).cmake -DCMAKE_INSTALL_PREFIX 
+        : $(targets)
+        : $(sources)
+        : $(properties)
+        ;
+
+    if <variant>debug in $(properties) {
+        OPTIONS on $(targets) += -DCMAKE_BUILD_TYPE=Debug ;
+    }
+    # default to Release
+    else {
+        OPTIONS on $(targets) += -DCMAKE_BUILD_TYPE=Release ;
+    }
+    if <link>static in $(properties) {
+        OPTIONS on $(targets) += -DBUILD_SHARED_LIBS=OFF ;
+    }
+    if <link>shared in $(properties) {
+        OPTIONS on $(targets) += -DBUILD_SHARED_LIBS=ON ;
+    }
+}
+
+
+XLOG = [ xmodule.logfile-action  ] ;
+
+actions cmake
+{
+    $(XLOG[1])="$(<[2])"
+    (
+        # Error & logging
+        set -e -x 
+        : "move to source dir"
+        cd "$(<[1]:D)"
+        : "Setup environment variables, (cmake requires some toolset args to be arguments)"
+        : "and Execute cmake lists file from source dir, output in current path"
+        CC="$(XTOOLSET_CC:J= )" \
+        CXX="$(XTOOLSET_CXX:J= )" \
+        LD="$(XTOOLSET_LD:J= )" \
+        CFLAGS="$(XTOOLSET_CFLAGS:J= )" \
+        CXXFLAGS="$(XTOOLSET_CXXFLAGS:J= )" \
+        LDFLAGS="$(XTOOLSET_LINKFLAGS:J= )" \
+        cmake   -DCMAKE_AR="$(XTOOLSET_AR:J= )" \
+                -DCMAKE_RANLIB="$(XTOOLSET_RANLIB:J= )" \
+                -DCMAKE_NM="$(XTOOLSET_NM:J= )" \
+                $(PREFIX_ARG)="$(>[3]:R=$(.CWD))" \
+                $(OPTIONS) \
+                "$(>[1]:DR=$(.CWD))"
+
+    ) $(XLOG[2])
+
+}
+

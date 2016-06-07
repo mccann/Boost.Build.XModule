@@ -1,0 +1,520 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+import type ;
+import "class" : new ;
+import path ;
+import project ;
+import generators ;
+import errors ;
+import regex ;
+import assert ;
+import string ;
+import feature ;
+import xmodule ;
+import sequence ;
+import trim ;
+import set : difference ;
+import xmodule : munge-str munge-url truncate-str ;
+
+feature.feature xgit-clone  : : free ;  # arguments for clone ..
+feature.feature xgit-ref    : : free ;  # revision/version/branch,etc
+
+
+type.register XSRCHASH_GIT :     : XSRCHASH ;
+type.register XGIT         : git ;
+
+
+##################################################################
+##
+##   xsrchash-git generator
+##
+##################################################################
+
+
+local rule compute-path-hash-really ( full-path )
+{
+    local cmd = "{ set -e"
+                "  cd $(full-path) "
+                "  git log -n 1 -- . "
+                "  git diff HEAD --diff-filter=ACMRTUB -- . "
+                "} 2>&1 " ;
+
+    # calculate hash of file-in-git-repository
+    local sh = [ trim.sh $(cmd:J="\n") : exit-status ] ;
+
+    if $(sh[2]) != 0 {
+        import errors ;
+        import tty ;
+        cmd = [ tty.join <cyan> [ basic-error-join $(cmd) ] ] ;
+
+        errors.user-error
+                  "Cannot compute gittree-hash"
+                : " -- execution failure "
+                : "    exit-code:" $(sh[2])
+                : "       output:" [ tty.join <red> $(sh[1]) ]
+                : "       script:" $(cmd)
+                ;
+    }
+
+    # summarize the files/diff/etc into a hash
+    return [ MD5 $(sh[1]) ] ;
+}
+
+
+rule compute-path-hash ( full-path )
+{
+    if ! $(.hashes.$(full-path)) {
+        .hashes.$(full-path) = [ compute-path-hash-really $(full-path) ] ;
+    }
+
+    return $(.hashes.$(full-path)) ;
+}
+
+#
+# creates a target that has hash in the name
+# useful if you want to rebuild dependent targets, only when the hash changes
+# tries to cleanup 'old' hashes
+#
+
+rule compute-hash ( file-in-git-repository project ? )
+{
+
+    if ! $(project) {
+        project = [ project.current ] ;
+    }
+
+    # get paths
+    local paths ;
+    for local loc in [ $(project).get source-location ]  {
+        # make abs path
+        local full-path = [ path.root $(file-in-git-repository) $(loc) ] ;
+        if [ path.exists $(full-path:D) ] {
+            paths += $(full-path:D) ;
+        }
+    }
+
+    paths =  [ sequence.unique $(paths) ] ;
+
+    # get hashes for each unique path
+    local hashes = [ sequence.transform compute-path-hash : $(paths) ] ;
+
+    if ! $(hashes) {
+        import errors ;
+        errors.user-error
+                  "Cannot compute gittree-hash"
+                : " -- path not found."
+                : "                     project:" [ $(project).name ]
+                : "  project-source-location(s):" [ $(project).get
+                                                    source-location ]
+                : "                   file-path:" $(file-in-git-repository)
+                ;
+    }
+
+    return [ truncate-str [ MD5 $(hashes:J=|) ] ] ;
+}
+
+
+class xsrchash-git-generator : xmodule-generator
+{
+    import xmodule-git : compute-hash ;
+
+    rule invalid-inputs ( project name ? : property-set : sources * )
+    {
+        local result ;
+        if ! $(name) {
+            result = "no name" ;
+        }
+        else if ! $(sources) {
+            result = "no source" ;
+        }
+
+        return $(result) ;
+    }
+
+    # traverse non-root target for source-files
+    local rule source-files ( target ) {
+        local result ;
+        local a = [ $(target).action ] ;
+        if $(a) {
+            for local t in [ $(a).sources ] {
+                if ! [ $(t).root ] {
+                    result += [ source-files $(t) ] ;
+                }
+            }
+        } else {
+            result = $(target) ;
+        }
+        return $(result) ;
+    }
+
+    # create hash target from a source-file directory
+    local rule directory-hash ( project name property-set source ) 
+    {
+        local hash = [ compute-hash 
+                        [ $(source).name ] 
+                        $(project) ] ;
+
+        return  [ xmodule.source-dependent-file-target
+                    $(project)
+                :   $(source)
+                :   xsrc-hashes
+                    /$(hash)
+                : 
+                    $(self.id) XSRCHASH_GIT  
+                ] ;
+    }
+
+    rule x-run ( project name ? : property-set : sources * )
+    {
+        local files = [ sequence.transform source-files : $(sources) ] ;
+        if $(files) {
+             return [ property-set.empty ]
+                    [ sequence.transform   directory-hash
+                                           $(project) $(name)
+                                           $(property-set)
+                                         : $(files) ] ;
+        }
+    }
+}
+
+generators.register [ new xsrchash-git-generator
+                          xmodule-git.srchash : : XSRCHASH ] ;
+
+actions srchash
+{
+    # remove any previous tree-hash-targets matching this pattern
+    rm -f "$(<:D)/"*"$(<:S)"
+    # make this hash file
+    touch $(<)
+}
+
+##################################################################
+##
+##   xrepo-git generator
+##
+##################################################################
+
+
+
+# return parsed list from input string
+# [1] = ref-type
+# [2] = ref
+
+rule parse-ref ( ref-str ? )
+{
+    local type ;
+    local ref  ;
+
+
+    local named = [ MATCH ^([a-z]+):(.+)$ : $(ref-str) ] ;
+    local hash  = [ MATCH ^([a-z0-9]+)$   : $(ref-str) ] ;
+
+    # support named syntax
+    #   examples:            branch:dev
+    #                           tag:release3.0
+    #                      revision:817ec66443
+    #
+    if $(named) && $(named[1]) in branch tag revision {
+        type = $(named[1]) ;
+        ref  = $(named[2]) ;
+    }
+    # support raw revision
+    else if $(hash) {
+        type = revision ;
+        ref  = $(hash)  ;
+    }
+    else if ! $(ref-str) || $(ref-str) = HEAD {
+        type = revision ;
+        ref  = HEAD ;
+    }
+    else {
+         errors.user-error "Bad git ref '$(ref-str)'" ;
+    }
+
+    return $(type) $(ref) ;
+}
+
+# if <xworkspace> isn't set:
+#
+# repo location needs to be based on URL, yet url's are often too big
+#
+# use '<hostbasename>-<filebasename>.XXXXX/REF/' as name
+#     XXXX = url hash
+#     REF  = ref str with : turned to _
+
+rule build-name ( url : property-set )
+{
+    local name ;
+
+    name = git [ munge-url $(url) ] ;
+    name = $(name:J=.) ;
+    
+    # now build REF part of path
+
+    # need gitref
+    local gitref = [ parse-ref [ $(property-set).get <xgit-ref> ] ] ;
+    local ref ;
+
+    if $(gitref[1]) = revision {
+        ref = $(gitref[2]) ;
+    } else {
+        local munged-type = [ munge-str $(gitref[1]) ] ;
+        local munged-name = [ munge-str $(gitref[2]) ] ;
+        # add hash incase munging creates collision
+        local hash = [ truncate-str [ MD5 $(gitref[1]):$(gitref[2]) ] ..... ] ;
+
+        ref = $(munged-type).$(munged-name).$(hash) ;
+    }
+   
+    return $(name)/$(ref) ;
+}
+
+class xrepo-git-generator : xmodule-url-generator
+{
+    import xmodule-git   : build-name ;
+    import xmodule       : construct-workspace ;
+    import xmodule-patch ;
+
+    rule generated-targets ( source : property-set : project name ? )
+    {
+
+        # create workspace
+        local workspace = [ construct-workspace $(project)
+                               [ build-name [ $(source).name  ]
+                                            : $(property-set) ]
+                             : # by default, git workspace is rather invariant 
+                               [ xvariant-ps $(property-set) : : .* ] 
+                             : $(source) ] ;
+
+        # get/construct root location
+        local xroot     = [ $(workspace).xroot XREPO : repo ] ;
+        local workpath  = [ $(workspace).path ] ;
+        local git-ps    = [ $(workspace).refine 
+                            [ xvariant-ps $(property-set) 
+                                : xrepo-.* xgit-.* 
+                                : .* 
+                            ] ] ; 
+
+
+        # clone (one-time)
+        local clone-log ;
+        local dot-git ;
+        {
+            local clone = [ new non-scanning-action $(source) $(xroot)
+                            : xmodule-git.clone : $(git-ps) ] ;
+
+            clone-log = [ virtual-target.register
+                            [ new xmodule-workspace-file-target 
+                                  log/git-clone.log
+                                : : $(workspace) : $(project)
+                                : $(clone) : $(workpath) ] ] ;
+
+            dot-git   = [ virtual-target.register
+                            [ new xmodule-workspace-file-target 
+                                  .git
+                                : : $(workspace) : $(project)
+                                : $(clone) : [ $(xroot).path ] ] ] ;
+        }
+
+        # reset repo
+        local reset-log ;
+        {
+            local reset = [ new non-scanning-action $(xroot) $(clone-log) $(dot-git)
+                            : xmodule-git.reset : $(git-ps) ] ;
+
+
+            reset-log = [ virtual-target.register
+                            [ new xmodule-workspace-file-target 
+                                  log/git-reset.log
+                                : : $(workspace) : $(project)
+                                : $(reset) : $(workpath) ] ] ;
+
+        }
+        
+        local patch-targets =   [ xmodule-patch.construct-targets 
+                                    $(xroot)
+                                    $(reset-log) 
+                                    $(property-set) 
+                                    $(project) ] ;
+       
+
+        return  [ property-set.empty ] 
+                [ virtual-target.register
+                    [ new xmodule-xmodule-final-target $(xroot) 
+                        : $(reset-log) $(patch-targets)
+                        : XREPO : $(project) ] ] ;
+    }
+}
+
+generators.register [ new xrepo-git-generator xmodule-git.clone : XGIT : XREPO ] ;
+xmodule.register-url-handler git XGIT : git : XGIT ;
+
+
+rule clone ( targets * : sources * : properties * )
+{
+    local ref = [ parse-ref [ MATCH ^<xgit-ref>(.+)$ : $(properties) ] ] ;
+    local clone-args = [ MATCH ^<xgit-clone>(.+)$ : $(properties) ] ;
+
+    # branches/tags require this:
+    if $(ref[1]) in branch tag {
+        CLONE_ARGS on $(targets) += --branch $(ref[2]) ;
+    }
+
+    # try to use shallow "--depth 1" if not a specific revision
+    if ! no-shallow in $(clone-args)
+    && ( $(ref[1]) != revision || $(ref[2]) = HEAD )
+    {
+        CLONE_ARGS on $(targets) += --depth 1 ;
+    }
+
+    # pass args through (that are not xmodule 'custom' args)
+    CLONE_ARGS on $(targets) += [ set.difference $(clone-args) : no-shallow ] ;
+
+    NOUPDATE $(targets) ;
+}
+
+
+XLOG = [ xmodule.logfile-action ] ;
+
+actions clone
+{
+    gitpath="$(>[2])"
+    giturl="$(>[1]:G=)"
+    $(XLOG[1])="$(<[1])"
+    { 
+        : 'is destination directory not empty?'
+        if [ -n "`ls -A "${gitpath}" 2>/dev/null`" ] ; then (
+            : destination exists and has files
+            : test for "rooted repository" 
+            : change to git path
+            cd "${gitpath}" || exit 1
+  
+            [ -z `git rev-parse --show-cdup` ] || {
+                echo path:'"${gitpath}"' is not a '"rooted repository"'
+                false 
+            } && {
+                : get its origin
+                url=`git ls-remote --get-url origin 2> /dev/null`
+                : test if matching origin
+                [ -z "${url}" ] || [ "${giturl}" != "${url}" ] || {
+                    echo repository:'${gitpath}' 
+                    echo "  repository mismatch!" 
+                    echo "    expected origin: ${giturl}"
+                    echo "      actual origin: ${url}"
+                    false
+                } 
+            }
+        )
+        else 
+            echo From: "${giturl}"  
+            git clone -v $(CLONE_ARGS) "${giturl}" "${gitpath}"
+        fi
+    } $(XLOG[2])
+}
+
+actions hard-reset-and-clean
+{
+    gitpath="$(>[1])"
+    $(XLOG[1])="$(<[1])"
+    (
+        set -e
+        : change to git path
+        cd "${gitpath}"
+  
+        : "Verify that this is a git repository managed by this xgit.jam"
+        : "without this check, it's possible a mistake here can reset the"
+        : "user's parent git repo"
+        cdup=`git rev-parse --show-cdup`
+        if [ $? -ne 0 ] || [ ! -z "$cdup" ] ; then
+            echo "Expected a rooted git repository! Aborting"
+            echo  "             path: '${gitpath}'"
+            if [ ! -z "$cdup" ] ; then
+                echo "    expected root: "`pwd`
+                echo "      actual root: "`git rev-parse --show-toplevel`
+            fi
+            false
+        else 
+              git reset "$(RESET_ARGS)"
+              git clean -dfx
+        fi
+    ) $(XLOG[2])
+}
+
+
+if --xrepo-reset in [ modules.peek : ARGV ] {
+    .always-reset = true ;
+}
+
+rule reset ( targets * : sources * : properties * )
+{
+    if $(.always-reset) {
+        ALWAYS $(targets) ;
+    }
+
+    local ref = [ parse-ref [ MATCH ^<xgit-ref>(.+)$ : $(properties) ] ] ;
+
+    RESET_ARGS on $(targets) = --hard $(ref[2]) ;
+    if $(ref[1]) = branch {
+        RESET_ARGS on $(targets) = --hard origin/$(ref[2]) ;
+    }
+
+    xmodule.is-path $(targets[2]) ;
+
+    # reset
+    xmodule-git.hard-reset-and-clean $(targets) : $(sources) ;
+}
+
+
+rule __test__  ( )
+{
+    import assert ;
+    import property-set ;
+
+    local rule ps ( raw * ) {
+        return [ property-set.create $(raw) ] ;
+    }
+
+    local simple-url
+        = https://github.com/name/repository.git ;
+    local dotted-name-url
+        = ssh://user1@sub1.organization.com/a/path/boost.build.xmodule.git ;
+    local dotted-name-url-2
+        = ssh://user2@sub2.organization.com/b/path/boost.build.xmodule.git ;
+
+    # test various mungings of urls
+    assert.equal git.gthb-rpstr.ad2f13/HEAD
+               :  [ build-name $(simple-url) : [ ps ] ] ;
+
+    assert.equal git.orgnz-bst.bld.xmdl.0b1e93/HEAD
+               :  [ build-name $(dotted-name-url) : [ ps ] ] ;
+
+
+    # test that a change in url, even if same for 'munged' parts, changes hash
+    assert.equal git.orgnz-bst.bld.xmdl.5799bd/HEAD
+               :  [ build-name $(dotted-name-url-2) : [ ps ] ] ;
+
+
+    # test refs
+    assert.equal git.gthb-rpstr.ad2f13/HEAD
+               :  [ build-name $(simple-url) : [ ps <xgit-ref>HEAD ] ] ;
+
+    assert.equal git.gthb-rpstr.ad2f13/799bd0b1e9
+               :  [ build-name $(simple-url) : [ ps <xgit-ref>799bd0b1e9 ] ] ;
+
+    assert.equal git.gthb-rpstr.ad2f13/tag.test.idea.1102.bnn.180b2
+               :  [ build-name $(simple-url)
+                  : [ ps <xgit-ref>tag:test-idea/1.1.0-2-banana ] ] ;
+
+    assert.equal git.src-prjct.e99d17/HEAD
+                : [ build-name file:///home/user/src/project/.git
+                  : [ ps ] ] ;
+
+
+
+}
+
+
+

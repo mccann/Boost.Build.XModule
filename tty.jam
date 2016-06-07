@@ -1,0 +1,277 @@
+# Copyright 2016 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+# detect type of TTY
+# This method seems to work in a number of environments.
+# Previous testing methods proved to be less robust.
+if [ SHELL "tty > /dev/null 2>&1 ; printf $?" ] = "0" {
+    if [ MATCH ([0-9]+) : [ SHELL "tput colors 2> /dev/null" ] ] > 0 {
+        .type  = "color tty" ;
+        .color_tty = true ;
+    } else {
+        .type = "tty" ;
+    }
+} else {
+    .type = "not a tty" ;
+}
+
+ # https://en.wikipedia.org/wiki/ANSI_escape_code
+.color-names  = black red green yellow blue magenta cyan white ;
+
+# probably a better way to do this...
+.color-name.0 = $(.color-names[1]) ;
+.color-name.1 = $(.color-names[2]) ;
+.color-name.2 = $(.color-names[3]) ;
+.color-name.3 = $(.color-names[4]) ;
+.color-name.4 = $(.color-names[5]) ;
+.color-name.5 = $(.color-names[6]) ;
+.color-name.6 = $(.color-names[7]) ;
+.color-name.7 = $(.color-names[8]) ;
+
+.color-name-prefixes = "" "bg:" "fg:" ;
+
+.code-regexs =  [fb]g[0-7][bn]?
+                bold normal reset
+                $(.color-name-prefixes)$(.color-names)
+                $(.color-name-prefixes)$(.color-names:U) ;
+
+.code-regexs = ^(<$(.code-regexs)>)$ ;
+
+rule .build_escape_codes {
+    local f = 3 ;
+    local b = 4 ;
+
+    local i.code.  = ";22" ; # normal intensity (implicit)
+    local i.code.n = ";22" ; # normal intensity (explicit)
+    local i.code.b = ";1"  ; # bright/bold intensity
+
+    local g.prefix.f    = ""    ; # no prefix, foreground
+    local g.prefix.b    = "bg:" ; # bg: background
+
+    # https://en.wikipedia.org/wiki/ANSI_escape_code
+    for local g in f b {
+        for local number in 0 1 2 3 4 5 6 7 {
+            for local i in "" n b { # intensities
+
+                local code   = $(.escape)$($(g))$(number)$(i.code.$(i:E=))m ;
+
+                # by fg# / bg#
+                .escape-codes.<$(g)g$(number)$(i:E=)>  = $(code) ;
+
+                # by name / NAME
+                local name = $(.color-name.$(number)) ;
+                if $(i) = b {
+                    name = $(name:U) ; # uppercase is bright
+                }
+                .escape-codes.<$(g.prefix.$(g))$(name)> = $(code) ;
+            }
+        }
+    }
+    .escape-codes.<bold>   = $(.escape)1m ;
+    .escape-codes.<normal> = $(.escape)0m ;
+    .escape-codes.<reset>  = $(.reset) ;
+}
+
+if $(.color_tty) {
+    .escape = [ MATCH "^(..)31m$" : [ SHELL "tput setaf 1" ] ] ;
+    .reset  = [ SHELL "tput sgr0" ] ;
+    .build_escape_codes ;
+}
+
+
+rule type {
+    return $(.type) ;
+}
+
+
+# decode a single markup minus the <>'s
+rule decode-raw ( code )
+{
+    return $(.escape-codes.$(code)) ;
+}
+
+# use this to join a coded set of arguments into a single string
+# with tty escape sequences
+# will be empty if no-non-markup
+# only spaces between non-codes get 'join-str' placed between
+# join-str defaults to " "
+rule join ( args * : join-str ? )
+{
+    join-str ?= " " ;
+
+    local reset ;
+    local decoded ;
+    local strs ;
+
+    for local i in $(args) {
+        local code = [ MATCH $(.code-regexs) : $(i) ] ;
+        if $(code) {
+            reset = true ;
+            if $(code) = <reset> {
+                reset = ;
+            }
+            decoded += $(.escape-codes.$(code)) ;
+        } else {
+            if $(strs) && $(i) != "" {
+                decoded += $(join-str) ;
+            }
+            strs    += $(i) ;
+            decoded += $(i) ;
+        }
+    }
+
+    # always reset
+    if $(reset) {
+        decoded += $(.escape-codes.<reset>) ;
+    }
+
+    if $(strs) {
+        return $(decoded:J=) ;
+    }
+}
+
+# Use this to echo content with color
+# - unlike the regular 'echo' command,
+#   this one will not put spaces between arguments
+# - single arguments that match <color>
+#   are replaced with color escape sequence
+rule coded-echo ( args * )
+{
+    if $(args) {
+        echo [ join $(args) ] ;
+    } else {
+        echo ;
+    }
+}
+
+
+rule coded-exit ( args * : errorcode ? )
+{
+    coded-echo $(args) ;
+
+    errorcode ?= 1 ;
+    exit $(errorcode) ;
+}
+
+# launch with --debug
+rule __test__ ( )
+{
+    import assert ;
+    import string ;
+
+
+    # visually inspect this output
+    for local color in [ modules.peek tty : .color-names ] {
+        coded-echo <$(color)> this is $(color) ;
+        coded-echo <$(color:U)> this is $(color:U) ;
+        coded-echo <bg:$(color)> this is bg:$(color) ;
+        coded-echo <bg:$(color:U)> this is bg:$(color:U) ;
+    }
+
+    # visually inspect this output
+    for local color in 0 1 2 3 4 5 6 7 {
+        for local g in f b {
+            for local i in "" n b {
+                coded-echo <$(g)g$(color)$(i:E)> this is $(g)g$(color)$(i:E) ;
+            }
+        }
+    }
+
+    # for testing purposes, force detection
+    modules.poke tty : .type   : "color tty" ;
+    modules.poke tty : .escape : "<!escape>" ;
+    modules.poke tty : .reset  : "<!reset>" ;
+    .build_escape_codes  ;
+
+
+    assert.result : join ;
+    assert.result : join : pizza ;
+
+    assert.result "fish" : join fish : pizza ;
+    assert.result "fishApizzafishB" : join fishA fishB : pizza ;
+    assert.result "<!escape>31;22mfish<!reset>" : join <red> fish  ;
+    assert.result "<!escape>31;22mfish<!reset>" : join <red> fish : pizza ;
+    assert.result "<!escape>31;22mfishApizzafishB<!reset>"
+                    : join <red> fishA fishB : pizza ;
+
+    assert.result "fish<!reset>" : join fish <reset> ;
+
+    assert.result "fish<!reset> fish2" : join fish <reset> fish2 ;
+
+    assert.result "<!escape>34;22mfish<!reset>"
+                : join <fg4> fish <reset> ;
+
+    # same thing twice?
+    assert.result "<!escape>34;22mfish<!reset>"
+                : join <fg4> fish <reset> ;
+
+    assert.result [ string.join colors
+                    <!escape>30;22m <!escape>31;22m
+                    <!escape>32;22m <!escape>33;22m
+                    <!escape>34;22m <!escape>35;22m
+                    <!escape>36;22m <!escape>37;22m
+                    <!reset> : "" ]
+                : join colors
+                    <black> <red>
+                    <green> <yellow>
+                    <blue>  <magenta>
+                    <cyan>  <white> ;
+
+    assert.result [ string.join colors
+                    <!escape>40;22m <!escape>41;22m
+                    <!escape>42;22m <!escape>43;22m
+                    <!escape>44;22m <!escape>45;22m
+                    <!escape>46;22m <!escape>47;22m
+                    <!reset> : "" ]
+                : join colors
+                    <bg:black> <bg:red>
+                    <bg:green> <bg:yellow>
+                    <bg:blue>  <bg:magenta>
+                    <bg:cyan>  <bg:white> ;
+
+    assert.result [ string.join colors
+                    <!escape>30;1m <!escape>31;1m
+                    <!escape>32;1m <!escape>33;1m
+                    <!escape>34;1m <!escape>35;1m
+                    <!escape>36;1m <!escape>37;1m
+                    <!reset> : "" ]
+                : join colors
+                    <BLACK> <RED>
+                    <GREEN> <YELLOW>
+                    <BLUE>  <MAGENTA>
+                    <CYAN>  <WHITE> ;
+
+    assert.result [ string.join colors
+                    <!escape>40;1m <!escape>41;1m
+                    <!escape>42;1m <!escape>43;1m
+                    <!escape>44;1m <!escape>45;1m
+                    <!escape>46;1m <!escape>47;1m
+                    <!reset> : "" ]
+                : join colors
+                    <bg:BLACK> <bg:RED>
+                    <bg:GREEN> <bg:YELLOW>
+                    <bg:BLUE>  <bg:MAGENTA>
+                    <bg:CYAN>  <bg:WHITE> ;
+
+    assert.result "<!escape>34;1mfish<!escape>34;22m<!reset>"
+                : join <BLUE> fish <blue>  ;
+
+    assert.result "<!escape>1mfish<!escape>0m fish<!reset>"
+                : join <bold> fish <normal> fish  ;
+
+    # for testing purposes, force detection of 'tty'
+    modules.poke tty : .type   : "tty" ;
+    modules.poke tty : .escape ;
+    modules.poke tty : .reset  ;
+    .build_escape_codes  ;
+
+    assert.result : join ;
+    assert.result fish : join fish ;
+    assert.result fish : join <fg4> fish <reset> ;
+    assert.result fish : join <fg4> fish <bg4>  ;
+    assert.result "fish fish" : join <bold> fish <normal> fish  ;
+    assert.result "fish fish" : join <bold> fish <red> <yellow> <normal> fish ;
+
+}

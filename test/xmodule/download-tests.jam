@@ -1,0 +1,66 @@
+
+# url for testing
+local self-url    = file://$(ROOT)/.git ;
+
+##
+## test git-clone, url as source
+xrepo   repo40    : $(self-url) : <xgit-ref>81dba51 ;
+xfile   README.md : repo40 ;
+
+##
+## test git-clone, url as property
+xrepo   repo41  : : <xurl>$(self-url) ;
+xfile   xfile41 : repo41 : <name>README.md ;
+
+# ##
+# ## test git-clone, branch feature ( not currently a real branch )
+# xrepo   repo42a : : <xurl>$(self-url)
+#                   : <xgit-ref>branch:chimozzle
+#                   ;
+# ##
+# ## test git-clone, branch feature (not currently a real tag)
+# xrepo   repo42b : : <xurl>$(self.-url)
+#                   : <xgit-ref>tag:tag-test/1.0-2/alpha
+#                   ;
+
+
+##
+## test git-clone as source to xfile
+xfile  repo43.xfile : $(self-url) : <name>README.md ;
+
+
+##
+## test git-clone as source to xbuild
+lib foo44 : [ xfile configure : $(self-url)
+                              : <name>test/xmodule/configure-pkg/configure ]
+          : <name>lib/!foo <xinclude>include <link>static
+          ;
+
+
+
+run       src/test.c foo44 : : : : run44 ;
+
+
+##
+## test git-clone as source to xbuild
+xrepo repo44b : $(self-url) ;
+xdist dist44b : repo44b//test/xmodule/configure-pkg/configure ;
+xdist dist44c : repo44b//xfile@test/xmodule/configure-pkg/configure ;
+xdist dist44d : repo44b//configure@test/xmodule/configure-pkg/configure ;
+
+lib foo44b    : dist44b//lib/!foo
+              : <xinclude>/include <link>static
+              ;
+run       src/test.c foo44b : : : : run44b ;
+
+
+##
+## test xrepo (git) <xworkspace> feature
+xrepo   repo45  : : <xurl>$(self-url) <xworkspace>repo45 ;
+
+
+# multi name xfile
+# xfile xmake.jam xgit.jam : $(self-url)
+#                          : <xpath>src ;
+
+
