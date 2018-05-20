@@ -10,9 +10,9 @@ import string ;
 # use char from string module instead
 .ws = [ string.whitespace ] ;
 
-.trim-left-regex  = ^[$(.ws)]*([^$(.ws)]*.*)$ ;
-.trim-right-regex = ^(|.*[^$(.ws)])[$(.ws)]*$ ;
-.trim-regex       = ^[$(.ws)]*(|.*[^$(.ws)])[$(.ws)]*$ ;
+.trim-left-regex  = "^[$(.ws)]*([^$(.ws)]*.*)$" ;
+.trim-right-regex = "^(|.*[^$(.ws)])[$(.ws)]*$" ;
+.trim-regex       = "^[$(.ws)]*(|.*[^$(.ws)])[$(.ws)]*$" ;
 
 rule trim-left-regex ( )
 {

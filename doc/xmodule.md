@@ -13,7 +13,7 @@ An **xdist** target is a prime example of this type. It represents the final ins
 
 This class of target are used in tandem with Repository Targets. Specific files and directories contained within Repository Targets must be exported and named within the Boost.Build environment to be useful.
 
-An **xfile** target is main example. It represents a file, and will attempt to expose the file's type through standard Boost.Build means. Another important example is **xinclude**. It represents a directory within a repository that is intended to be part of include path for dependent targets.
+An **xfile** target is main example. It represents a file, and will attempt to expose the file's type through standard Boost.Build means. Another important example is **xinclude**. It represents a directory within a repository that is intended to be part of include path for dependent targets. **xsystem-include** is like **xinclude** but will set compiler's system include path instead, which is useful for suppression of warnings from thirdparty included sources.
 
 
 

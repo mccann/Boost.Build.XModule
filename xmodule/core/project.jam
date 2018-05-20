@@ -216,7 +216,7 @@ class xmodule-project-target : project-target
             else {
                 local url = [ parse-url $(n) ] ;
                 if ! $(url[1]) {
-                    echo 'Warning: target/file $(n) not found.' ;
+                    echo "Warning: target/file $(n) not found." ;
                 }
             } 
         }

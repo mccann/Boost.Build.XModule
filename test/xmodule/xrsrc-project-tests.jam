@@ -1,6 +1,6 @@
 
 
-xrepo       r2-self    : file://$(ROOT)/.git ;
+xrepo       r2-self    : "file://$(ROOT)/.git" ;
 xdist       r2-dist    : r2-self//test/xmodule/configure-pkg/configure ;
 xinclude    r2-inc     : r2-dist//include  ;
 xlib        r2-lib     : r2-dist//lib/!foo : <link>static ;

@@ -171,11 +171,15 @@ class xfile-export-generator : xmodule-export-generator
         # need to have created a target, even if <xinclude>'s exist
         if $(targets)
         {
-            # create 'xinclude' property-set from <xinclude>'s
+            # create 'xinclude' property-set from <xinclude> & <xsystem-include>
             return  [ xinclude-property-set $(xmpath) :
                         [ sequence.transform path-target XINCLUDE
                               $(project) $(xmpath) $(property-set)
                             : [ $(property-set).get <xinclude> ]
+                        ]
+                        [ sequence.transform path-target XSYSTEMINCLUDE
+                              $(project) $(xmpath) $(property-set)
+                            : [ $(property-set).get <xsystem-include> ]
                     ]   ]
                     $(targets) ;
         }

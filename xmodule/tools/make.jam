@@ -186,7 +186,7 @@ rule setup-makefile-generate-action ( configure-action
 
 
     # custom actions
-    for local action in [ MATCH ^<xpre-config-action>[@](.*)$ : $(properties) ] {
+    for local action in [ MATCH "^<xpre-config-action>[@](.*)$" : $(properties) ] {
         indirect.call $(action) $(targets) : $(sources) : $(properties) ;
     }
 
@@ -235,16 +235,19 @@ class xmake-build-generator : xmake-workspace-generator
         local workspace  ;
         local bld-root   ; 
         local build-type ;
+        local build-rule ;
         {
             # EXO build case
             if XMAKEFILE_EXO = [ $(XMAKEFILE).type ] {
                 build-type = XMAKE_EXO_BUILD ;
+                build-rule = build ;
                 workspace  = [ $(XMAKEFILE).workspace ] ;
                 bld-root   = [ $(workspace).xroot XBUILD ] ;
             }
             # SRC build case 
             else {
                 build-type = XMAKE_SRC_BUILD ;
+                build-rule = inplace-build ;
 
                 # if XMAKEFILE is already in a workspace
                 # OK because this is an inplace build
@@ -262,7 +265,7 @@ class xmake-build-generator : xmake-workspace-generator
                                     : : $(workspace) : $(project)
                                     : [ new non-scanning-action 
                                           $(XMAKEFILE) 
-                                        : xmodule-make.build
+                                        : xmodule-make.$(build-rule)
                                         : [ $(workspace).refine    
                                             # refine by only what makes sense for build
                                             [ xvariant-ps $(property-set) 
@@ -316,24 +319,43 @@ toolset.flags   $(__name__).build JAM_SEMAPHORE
                                 : XMODULE-BUILD-SEMAPHORE
                                 ;
 
-rule build ( targets * : sources * : properties * )
+toolset.flags   $(__name__).inplace-build TARGETS
+                                : <xbuild-arg>
+                                ;
+toolset.flags   $(__name__).inplace-build DEFAULT_NUM_JOBS
+                                : [ build-jobs-arg.external-build-jobs-arg ]
+                                ;
+toolset.flags   $(__name__).inplace-build NUM_JOBS
+                                : <xbuild-jobs>
+                                ;
+toolset.flags   $(__name__).inplace-build JAM_SEMAPHORE
+                                : XMODULE-BUILD-SEMAPHORE
+                                ;
+                                
+rule setup-build-env ( targets * : properties * )
 {
 
-    #http://stackoverflow.com/questions/2821043/allowed-characters-in-linux-environment-variable-names
-    local pairs = [ MATCH ^<xmake-env>([a-zA-Z_][a-zA-Z_0-9]*)=(.*)$ : $(properties) ] ;
+    local pairs = [ MATCH "^<xmake-env>([a-zA-Z_][a-zA-Z_0-9]*)=(.*)$" : $(properties) ] ;
     while $(pairs) {
         ENV_VARS on $(targets) += $(pairs[1])='$(pairs[2])' ;
         pairs = $(pairs[3-]) ;
     }
 }
+
+
 .NEWLINE = "\n" ;
+.EXPORT  = "export " ;
+rule build ( targets * : sources * : properties * )
+{
+    setup-build-env  $(targets) : $(properties) ;
+}
 
 actions build
 {
     $(XLOG[1])="$(<[1])"
     {
         : set env variables 
-        $(ENV_VARS)$(.NEWLINE)
+        $(.EXPORT)$(ENV_VARS)$(.NEWLINE)
     
         : xmake build action
         echo make -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
@@ -341,6 +363,43 @@ actions build
 
     } $(XLOG[2])
 }
+
+
+rule inplace-build ( targets * : sources * : properties * )
+{
+    # setup toolset
+    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
+
+    # let env override?
+    setup-build-env  $(targets) : $(properties) ;
+}
+
+actions inplace-build
+{
+    $(XLOG[1])="$(<[1])"
+    {
+        : set env variables 
+        $(.EXPORT)$(ENV_VARS)$(.NEWLINE)
+    
+        : set xtoolset env-variables
+        $(.EXPORT)CC="$(XTOOLSET_CC:J= )" 
+        $(.EXPORT)CXX="$(XTOOLSET_CXX:J= )" 
+        $(.EXPORT)LD="$(XTOOLSET_LD:J= )" 
+        $(.EXPORT)AR="$(XTOOLSET_AR:J= )" 
+        $(.EXPORT)NM="$(XTOOLSET_NM:J= )" 
+        $(.EXPORT)RANLIB="$(XTOOLSET_RANLIB:J= )" 
+        $(.EXPORT)CFLAGS="$(XTOOLSET_CFLAGS:J= )"  
+        $(.EXPORT)CXXFLAGS="$(XTOOLSET_CXXFLAGS:J= )" 
+        $(.EXPORT)LDFLAGS="$(XTOOLSET_LINKFLAGS:J= )" 
+    
+        : xmake build action
+        echo make -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
+        make -C "$(>[1]:D)" -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
+
+    } $(XLOG[2])
+}
+
+
 
 ##################################################################
 ##
@@ -408,7 +467,7 @@ toolset.flags   $(__name__).install TARGETS : <xdist-arg> ;
 
 rule install ( targets * : sources * : properties * )
 {
-    local j = [ MATCH ^<xdist-jobs>([0-9]+|%default%)$ 
+    local j = [ MATCH "^<xdist-jobs>([0-9]+|%default%)$" 
                         : $(properties) ] ;
     j = $(j[1]) ;
 

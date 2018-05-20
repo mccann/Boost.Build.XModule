@@ -55,7 +55,7 @@ actions patch
 
 rule construct-action ( workspace xroot dep-target project filtered-ps action )
 {
-    local name = [ MATCH ^[@](.*[%].*)[.](.*)$ : $(action) ] ;
+    local name = [ MATCH "^[@](.*[%].*)[.](.*)$" : $(action) ] ;
     if ! $(name) {
         errors.user-error "<xaction>$(action) missing leading @" ;
     }
@@ -83,7 +83,7 @@ rule construct-action ( workspace xroot dep-target project filtered-ps action )
 
 rule xaction ( targets * : sources * : properties * )
 {
-    indirect.call [ MATCH ^<xaction>[@](.*)$ : $(properties) ] 
+    indirect.call [ MATCH "^<xaction>[@](.*)$" : $(properties) ] 
                 $(targets) : $(sources) : $(properties) ;
        
 }

@@ -1,4 +1,4 @@
-xrepo       r1-self    : file://$(ROOT)/.git ;
+xrepo       r1-self    : "file://$(ROOT)/.git" ;
 xfile       r1-conf1   : r1-self  : <name>test/xmodule/configure-pkg/configure ;
 xpath       r1-xpath   : r1-self  : <name>test/xmodule ;
 xfile       r1-conf2   : r1-xpath : <name>configure-pkg/configure ;

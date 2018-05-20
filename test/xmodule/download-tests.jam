@@ -1,6 +1,6 @@
 
 # url for testing
-local self-url    = file://$(ROOT)/.git ;
+local self-url    = "file://$(ROOT)/.git" ;
 
 ##
 ## test git-clone, url as source

@@ -21,14 +21,14 @@ rule jobs-arg-from-options ( options * )
     # parse out '-j' option .. support "-jN" and "-j N"
     for opt in $(options) {
         if ! $(j-arg) {
-            local m = [ MATCH ^([0-9]+).*$ : $(opt) ] ;
+            local m = [ MATCH "^([0-9]+).*$" : $(opt) ] ;
             if $(m) {
                 if $(last-option) = "-j" {
                     j-arg = $(m) ;
                 }
             }
             else {
-                m = [ MATCH ^-j([0-9]+).*$ : $(opt) ] ;
+                m = [ MATCH "^-j([0-9]+).*$" : $(opt) ] ;
                 if $(m) {
                     j-arg = $(m) ;
                 }
@@ -91,7 +91,7 @@ rule compute-external-build-jobs-arg ( boost-j ? : limit ? )
 #
 #   - returns 1 if it can't find out
 
-.lastnumber-regex  = ([0-9]+)[^0-9]*$ ;
+.lastnumber-regex  = "([0-9]+)[^0-9]*$" ;
 
 rule host-num-cores ( )
 {
@@ -123,7 +123,7 @@ rule host-num-cores ( )
         }
 
         # still don't know? default to 1
-        if ! [ MATCH ^([0-9]+)$ : $(.host-num-cores) ] {
+        if ! [ MATCH "^([0-9]+)$" : $(.host-num-cores) ] {
             .host-num-cores = 1 ;
         }
     }
@@ -204,8 +204,8 @@ rule __test__ ( )
 
 
     # ensure they at least can run
-    echo 'local' external-built-jobs-arg: [ external-build-jobs-arg ] ;
-    echo 'local' external-built-jobs-arg: [ external-build-jobs-arg dist ] ;
+    echo 'local' "external-built-jobs-arg:" [ external-build-jobs-arg ] ;
+    echo 'local' "external-built-jobs-arg:" [ external-build-jobs-arg dist ] ;
 
     # check limiting logic
     assert.result   : compute-external-build-jobs-arg       ;
@@ -235,10 +235,10 @@ rule __test__ ( )
 
 
     # regex test
-    assert.result 1 : MATCH ^([0-9]+)$ : 1 ;
-    assert.result 88 : MATCH ^([0-9]+)$ : 88 ;
-    assert.result 1234567890 : MATCH ^([0-9]+)$ : 1234567890 ;
-    assert.result 0000000001 : MATCH ^([0-9]+)$ : 0000000001 ;
+    assert.result 1 : MATCH "^([0-9]+)$" : 1 ;
+    assert.result 88 : MATCH "^([0-9]+)$" : 88 ;
+    assert.result 1234567890 : MATCH "^([0-9]+)$" : 1234567890 ;
+    assert.result 0000000001 : MATCH "^([0-9]+)$" : 0000000001 ;
 
     local re = [ modules.peek build-jobs-arg : .lastnumber-regex ] ;
     assert.result 88 : MATCH $(re) : "hw.ncpu: 88" ;

@@ -1,0 +1,17 @@
+# Copyright 2018 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+#### plugin support
+#### link shared always
+
+import type ;
+
+import feature ;
+
+
+type.register DYNAMIC_PLUGIN : : SHARED_LIB ;
+
+feature.feature fpic : default on : optional propagated composite  ;
+
+feature.compose <fpic>on : <cflags>-fPIC ;

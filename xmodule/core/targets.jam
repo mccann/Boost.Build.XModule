@@ -45,7 +45,7 @@ local rule compose-empty-target-name ( rule-name : name * : sources * )
         }
 
         # replace runs of non-filename, etc chars with _
-        name = [ regex.replace $(name) [^a-zA-Z_-]+ _ ] ;
+        name = [ regex.replace $(name) "[^a-zA-Z_-]+" _ ] ;
 
         # prepend rulename as path
         # avoids name collisions due to

@@ -11,7 +11,7 @@ rule object-stack ( )
 
     # backtrace leaves a trailing '.' on module names
     #  - remove that, and filter out non 'object(...)@123' modules
-    return [ MATCH ^(object\\(.*\\)@[1-9][0-9]*).?$ : $(modules) ] ;
+    return [ MATCH "^(object\\(.*\\)@[1-9][0-9]*).?$" : $(modules) ] ;
 }
 
 

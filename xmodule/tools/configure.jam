@@ -61,7 +61,7 @@ class xconfigure-configure-generator : xmodule-generator
         local a  = [ new non-scanning-action $(XBUILDCONF)
                          : xmodule-configure.buildconf : $(property-set) ] ;
 
-        local t1 = [ new file-target $(buildconf-script:D)/configure exact
+        local t1 = [ new file-target [ path.join $(buildconf-script:D) configure ] exact
                     : XCONFIGURE : $(project) : $(a) : $(buildconf-path) ] ;
 
         local t2 = [ new file-target $(name)/log/$(buildconf-script:D=).log

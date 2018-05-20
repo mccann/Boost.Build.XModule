@@ -18,14 +18,14 @@ rule munge-str ( str )
 {
     local r ;
 
-    for local s in [ regex.split $(str) [^a-zA-Z0-9] ] {
+    for local s in [ regex.split $(str) "[^a-zA-Z0-9]" ] {
         # only abbreviate if longer than 4 characters
         if [ MATCH ^(.....).*$ : $(s) ] {
             s =  [ string.abbreviate $(s) ] ;
         }
         if $(s) {
             # combine numbers .
-            local numbers = [ MATCH ^([0-9]+)$ : $(s) $(r[-1]) ] ;
+            local numbers = [ MATCH "^([0-9]+)$" : $(s) $(r[-1]) ] ;
             if $(numbers[2]) {
                 r = $(r[1--2]) $(r[-1]:E="")$(s) ;
             } else {
@@ -64,8 +64,8 @@ rule munge-str ( str )
 
 rule parse-url ( url )
 {
-    local m = [ MATCH ^([^?]*)[?]?(.*)$ : $(url) ] ;
-    local n = [ MATCH ^([a-z]+)://([^/]*)(|/.*)$ : $(m[1]) ] ;
+    local m = [ MATCH "^([^?]*)[?]?(.*)$" : $(url) ] ;
+    local n = [ MATCH "^([a-z]+)://([^/]*)(|/.*)$" : $(m[1]) ] ;
 
     return  $(n[1]:E=) 
             $(n[2]:E=)
@@ -172,17 +172,17 @@ rule __test__url ( )
 {
     import assert ;
 
-    assert.result http foo.com /some/file.html arg=5 : parse-url http://foo.com/some/file.html?arg=5   ;
-    assert.result http foo.com "/" "" : parse-url http://foo.com/  ;
-    assert.result http foo.com "" "" : parse-url http://foo.com   ;
-    assert.result http foo.com "/" arg=1 : parse-url http://foo.com/?arg=1  ;
-    assert.result http foo.com "" arg=2 : parse-url http://foo.com?arg=2   ;
+    assert.result http foo.com /some/file.html arg=5 : parse-url "http://foo.com/some/file.html?arg=5"   ;
+    assert.result http foo.com "/" "" : parse-url "http://foo.com/"  ;
+    assert.result http foo.com "" "" : parse-url "http://foo.com"   ;
+    assert.result http foo.com "/" arg=1 : parse-url "http://foo.com/?arg=1"  ;
+    assert.result http foo.com "" arg=2 : parse-url "http://foo.com?arg=2"   ;
     
-    assert.result file "" /path/to/file.txt "" : parse-url file:///path/to/file.txt ;
-    assert.result file "" /path/to/file.txt "arg=2" : parse-url file:///path/to/file.txt?arg=2 ;
+    assert.result file "" /path/to/file.txt "" : parse-url "file:///path/to/file.txt" ;
+    assert.result file "" /path/to/file.txt "arg=2" : parse-url "file:///path/to/file.txt?arg=2" ;
 
-    assert.result "" "" /path/to/file.txt "" : parse-url /path/to/file.txt ;
-    assert.result "" "" /path/to/file.txt "arg=2" : parse-url /path/to/file.txt?arg=2 ;
+    assert.result "" "" /path/to/file.txt "" : parse-url "/path/to/file.txt" ;
+    assert.result "" "" /path/to/file.txt "arg=2" : parse-url "/path/to/file.txt?arg=2" ;
 
     assert.result "" "" path/to/file.txt "" : parse-url path/to/file.txt ;
     assert.result "" "" path/to/file.txt "arg=2" : parse-url path/to/file.txt?arg=2 ;

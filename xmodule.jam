@@ -154,6 +154,7 @@ register-export-generators xfile      XFILE    ;
 register-export-generators xlib       LIB      : * : builtin.lib-generator ;
 register-export-generators xlib       XLIB     : * : builtin.lib-generator ;
 register-export-generators xinclude   XINCLUDE ;
+register-export-generators xsystem-include   XSYSTEMINCLUDE ;
 
 
 # must be a complete list of all non-xfile types
@@ -170,7 +171,7 @@ rule __test__ ( )
 
     local xmodule-tests = [ MATCH ^(__test__.+)$ : [ RULENAMES xmodule ] ] ;
     # run __test__* rules
-    echo found tests in xmodule: "\n\t$(xmodule-tests)"  ; 
+    echo "found tests in xmodule: \n\t$(xmodule-tests)"  ; 
     for local test in $(xmodule-tests) {
         echo running $(test) ... ;
         $(test) ;

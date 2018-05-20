@@ -16,6 +16,7 @@ feature.feature xpre-config-action   : : incidental free ;
 # repository  export features
 feature.feature xpath               : : free ;
 feature.feature xinclude            : : free ;
+feature.feature xsystem-include     : : free ;
 feature.feature xorig-target-name   : : free incidental ;
 feature.feature xfile-type          : : free ;
 

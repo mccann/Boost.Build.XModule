@@ -242,7 +242,7 @@ rule xtoolset-config-targets ( targets * : properties * )
 
 
     # <xtoolset-xxxxxxx> feature options 
-    local xtoolset-options = [ MATCH ^<(xtoolset-[a-z]+)>(.*)$ : $(properties) ] ;
+    local xtoolset-options = [ MATCH "^<(xtoolset-[a-z]+)>(.*)$" : $(properties) ] ;
     while $(xtoolset-options) {
         local var =  [ regex.split $(xtoolset-options[1]:U) "-" ] ;
         var = $(var:J=_) ;
@@ -285,7 +285,7 @@ rule xtoolset-fixup-cmd-flags ( targets * : cmd flags )
     for local value in $(cmd-values) {
         if $(found-flag) || [ MATCH ^(-.*)$ : $(value) ] {
             found-flag = true ;
-            local link-flag = [ MATCH ^-Wl,(.*)$ : $(value) ] ;
+            local link-flag = [ MATCH ^(-Wl,.*)$ : $(value) ] ;
             if $(link-flag) {
                 link-flags += $(link-flag) ;
             }
@@ -306,7 +306,7 @@ rule xtoolset-fixup-cmd-flags ( targets * : cmd flags )
             XTOOLSET_$(flags)  on $(targets) = $(flag-parts) $(cmd-flags-value) ;
         }
         if $(link-flags) {
-            XTOOLSET_LINKFLAGS on $(targets) = $(link-parts) $(lnk-flags-value) ;
+            XTOOLSET_LINKFLAGS on $(targets) = $(link-flags) $(lnk-flags-value) ;
         }
     }
 }

@@ -209,8 +209,8 @@ rule parse-ref ( ref-str ? )
     local ref  ;
 
 
-    local named = [ MATCH ^([a-z]+):(.+)$ : $(ref-str) ] ;
-    local hash  = [ MATCH ^([a-z0-9]+)$   : $(ref-str) ] ;
+    local named = [ MATCH "^([a-z]+):(.+)$" : $(ref-str) ] ;
+    local hash  = [ MATCH "^([a-z0-9]+)$"   : $(ref-str) ] ;
 
     # support named syntax
     #   examples:            branch:dev
@@ -264,7 +264,7 @@ rule build-name ( url : property-set )
         local munged-type = [ munge-str $(gitref[1]) ] ;
         local munged-name = [ munge-str $(gitref[2]) ] ;
         # add hash incase munging creates collision
-        local hash = [ truncate-str [ MD5 $(gitref[1]):$(gitref[2]) ] ..... ] ;
+        local hash = [ truncate-str [ MD5 "$(gitref[1]):$(gitref[2])" ] ..... ] ;
 
         ref = $(munged-type).$(munged-name).$(hash) ;
     }
@@ -478,11 +478,11 @@ rule __test__  ( )
     }
 
     local simple-url
-        = https://github.com/name/repository.git ;
+        = "https://github.com/name/repository.git" ;
     local dotted-name-url
-        = ssh://user1@sub1.organization.com/a/path/boost.build.xmodule.git ;
+        = "ssh://user1@sub1.organization.com/a/path/boost.build.xmodule.git" ;
     local dotted-name-url-2
-        = ssh://user2@sub2.organization.com/b/path/boost.build.xmodule.git ;
+        = "ssh://user2@sub2.organization.com/b/path/boost.build.xmodule.git" ;
 
     # test various mungings of urls
     assert.equal git.gthb-rpstr.ad2f13/HEAD
@@ -506,10 +506,10 @@ rule __test__  ( )
 
     assert.equal git.gthb-rpstr.ad2f13/tag.test.idea.1102.bnn.180b2
                :  [ build-name $(simple-url)
-                  : [ ps <xgit-ref>tag:test-idea/1.1.0-2-banana ] ] ;
+                  : [ ps "<xgit-ref>tag:test-idea/1.1.0-2-banana" ] ] ;
 
     assert.equal git.src-prjct.e99d17/HEAD
-                : [ build-name file:///home/user/src/project/.git
+                : [ build-name "file:///home/user/src/project/.git"
                   : [ ps ] ] ;
 
 

@@ -127,9 +127,9 @@ local rule regex-glob-pattern ( glob-pattern )
             [ regex.replace
               [ regex.replace
                 $(glob-pattern)
-                \\? [^.]
+                "\\?" "[^.]"
               ]
-              \\* [^.]*
+              "\\*" "[^.]*"
             ] ;
 
     return $(re) ;
@@ -727,7 +727,7 @@ local rule homebrew-cellar-path ( )
 local rule homebrew-cellar ( formula : version ? : with *  )
 {
     local rule ver ( obj ) {
-        return [ MATCH \"version\":\"([^\"]*)\" : $(obj) ] ;
+        return [ MATCH "\"version\":\"([^\"]*)\"" : $(obj) ] ;
     }
 
     # cache
@@ -762,13 +762,13 @@ local rule homebrew-cellar ( formula : version ? : with *  )
     local version-obj ;
     # hopefully brew doesn't change order of items in it's json!
     # -- this could stop working -- not a proper json parser
-    local version-objs = [ MATCH ({\"version\":[^}]*}) : $(json) ] ;
+    local version-objs = [ MATCH "({\"version\":[^}]*})" : $(json) ] ;
 
     # multiple versions?
     if $(version-objs[2]) {
         local find-version = $(version) ;
         if ! $(find-version) {
-            find-version = [ MATCH \"linked_keg\":\"([^\"]*)\" : $(json) ] ;
+            find-version = [ MATCH "\"linked_keg\":\"([^\"]*)\"" : $(json) ] ;
             if ! $(find-version) {
                 echo "Error: ambiguous homebrew formula '$(formula)'" ;
                 echo "  - has multiple installed versions " ;
@@ -827,7 +827,7 @@ local rule homebrew-cellar ( formula : version ? : with *  )
     # check -with ?
     local missing-with = ;
     if $(with) {
-        local options = [ MATCH \"used_options\":\\[([^\\]]*)\\]
+        local options = [ MATCH "\"used_options\":\\[([^\\]]*)\\]"
                             : $(version-obj) ] ;
 
         for local w in $(with) {
@@ -1066,7 +1066,7 @@ rule system-libs    ( names +
         if $(grist) {
 
             if <os> = $(grist) {
-                local m = [ MATCH ^([A-Z]+):(.*)$ : $(p:G=) ] ;
+                local m = [ MATCH "^([A-Z]+):(.*)$" : $(p:G=) ] ;
                 if $(m) && $(m[1]) = $(.OS) {
                     p = $(m[2]) ;
                     grist = $(p:G) ;

@@ -50,6 +50,9 @@ rule cmake-configure ( targets * : sources * : properties * )
     if <variant>debug in $(properties) {
         OPTIONS on $(targets) += -DCMAKE_BUILD_TYPE=Debug ;
     }
+    else if <variant>sanitize in $(properties) {
+        OPTIONS on $(targets) += -DCMAKE_BUILD_TYPE=Debug ;
+    }
     # default to Release
     else {
         OPTIONS on $(targets) += -DCMAKE_BUILD_TYPE=Release ;
@@ -59,6 +62,9 @@ rule cmake-configure ( targets * : sources * : properties * )
     }
     if <link>shared in $(properties) {
         OPTIONS on $(targets) += -DBUILD_SHARED_LIBS=ON ;
+    }
+    if <fpic>on in $(properties) {
+        OPTIONS on $(targets) += "-DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=TRUE" ;
     }
 }
 
@@ -84,6 +90,7 @@ actions cmake
         cmake   -DCMAKE_AR="$(XTOOLSET_AR:J= )" \
                 -DCMAKE_RANLIB="$(XTOOLSET_RANLIB:J= )" \
                 -DCMAKE_NM="$(XTOOLSET_NM:J= )" \
+                -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
                 $(PREFIX_ARG)="$(>[3]:R=$(.CWD))" \
                 $(OPTIONS) \
                 "$(>[1]:DR=$(.CWD))"

@@ -29,9 +29,11 @@ type.register XROOT        ;
 ## resource-locator inside an existing XMODULE ;
 
 ## xmodule exports
-type.register XINCLUDE :  : H   ;
-type.register XFILE    :        ;
-type.register XLIB     :  : LIB ;
+type.register XINCLUDE          :  : H   ;
+type.register XSYSTEMINCLUDE    :  :     ;
+type.register XFILE             :        ;
+type.register XLIB              :  : LIB ;
+
 
 ## misc support types
 type.register XSRCHASH   ;
@@ -39,28 +41,36 @@ type.register XSRCHASH   ;
 
 ##################################################################
 ##
-##    overload 'type.type' for detection of type from filename
+##    reimplement 'type.type' for detection of type from filename
 ##
 ##################################################################
 
-# move type.type into this module as local rule type-type
-IMPORT type : type : $(__name__) : type-type ;
-
-rule type ( filename )
+# xmodule implementation with access to variables
+rule xmodule-type ( filename ) 
 {
-    # try by filename first
-    local result = $(.file.type.$(filename:D=)) ;
-
-    # if that didn't work, try original rule
-    if ! $(result) {
-        result = [ type-type $(filename) ] ;
-    }
-    return $(result) ;
+    return $(.file.type.$(filename:D=)) ;
 }
 
-# replace original type.type with new version .. and re-export
-IMPORT $(__name__) : type : type : type ;
-EXPORT type : type ;
+# put xmodule version into type module
+IMPORT $(__name__) : xmodule-type : type : xmodule-type ;
+
+# save original type.type 
+IMPORT type : type : type : xmodule-original-type ;
+
+
+module type {
+    rule type ( filename )
+    {
+        # try by xmodule type first
+        local result = [ xmodule-type $(filename) ] ;
+
+        # if that didn't work, try original rule
+        if ! $(result) {
+            return [ xmodule-original-type $(1) ] ;
+        }
+        return $(result) ;
+    }
+}
 
 
 ##################################################################
@@ -89,3 +99,110 @@ rule register-filenames ( filenames + : type )
         }
     }
 }
+
+
+
+##################################################################
+##
+##  fix caching bug in class subvariant
+##
+##################################################################
+
+module class@subvariant
+{
+    # make caching here dependent on target-type (bug in boost.build?)
+    rule xmodule-all-target-directories ( target-type ? )
+    {
+
+        local key = self.xmodule-target-directories-$(target-type:E="") ;
+        if ! $($(key))-is-not-empty {
+            local result = [ xmodule-compute-target-directories $(target-type) ] ;
+            if ! $(result) {
+                result = "" ;
+            }
+            $(key) = $(result) ;
+        }
+        if $($(key)) = "" {
+            return ;
+        }
+        else {
+            return $($(key)) ;
+        }
+    }
+    
+    rule xmodule-compute-target-directories ( target-type ? )
+    {
+        local result ;
+        for local t in $(self.created-targets)
+        {
+            # Skip targets of the wrong type.
+            local type = [ $(t).type ] ;
+            if ! $(target-type) ||
+                ( $(type) && [ type.is-derived $(type) $(target-type) ] )
+            {
+                result = [ sequence.merge $(result) : [ $(t).path ] ] ;
+            }
+        }
+        for local d in $(self.other-dg)
+        {
+            result += [ $(d).xmodule-all-target-directories $(target-type) ] ;
+        }
+        return $(result) ;
+    }
+    
+    rule implicit-system-includes ( prefix : target-type ? )
+    {
+        local key = xmodule-isi-$(prefix)-$(target-type:E="") ;
+        
+        if ! $($(key))-is-not-empty {
+            local target-paths = [ xmodule-all-target-directories $(target-type) ] ;
+            target-paths = [ sequence.unique $(target-paths) ] ;
+            local result = $(prefix)$(target-paths) ;
+            if ! $(result) {
+                result = "" ;
+            }
+            $(key) = $(result) ;
+        }
+        
+        if $($(key)) = "" {
+            return ;
+        } else {
+            return $($(key)) ;
+        }
+    }
+}
+
+##################################################################
+##
+##    reimplement 'adjust-properties' method from  
+##                boost.build builtin class 'compile-action'
+##
+##    support <xsystem-include>
+##
+##################################################################
+
+# save original class@compile-action.adjust-properties  
+IMPORT class@compile-action : adjust-properties : 
+       class@compile-action : xmodule-orig-adjust-properties ;
+       
+module class@compile-action 
+{
+    rule adjust-properties ( property-set )
+    {
+        property-set = [ xmodule-orig-adjust-properties $(property-set) ] ;
+        
+        local s = [ $(self.targets[1]).creating-subvariant ] ;
+        if $(s) {
+            property-set = 
+                [ $(property-set).add-raw 
+                    [ $(s).implicit-system-includes "<cflags>-isystem " 
+                        : XSYSTEMINCLUDE 
+                    ] 
+                ] ;
+        }
+        return $(property-set) ;
+    }
+}
+
+
+

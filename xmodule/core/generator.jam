@@ -64,7 +64,7 @@ class xmodule-generator : generator
         }
 
         # these basic boost.build properties are never filtered 
-        xvariant += use dependency implicit-dependency location-prefix ;
+        xvariant += use dependency implicit-dependency location-prefix relevant ;
 
         # this basic xmodule property is not filtered
         xvariant += xworkspace ;
@@ -72,22 +72,27 @@ class xmodule-generator : generator
         local variant   = [ filter <xvariant>   : $(xvariant)   ] ;
         local invariant = [ filter <xinvariant> : $(xinvariant) ] ;
  
-        #echo raw: $(raw) ;
-        #echo variant: $(variant) ;
-      
-        if $(invariant) {
-            raw = [ set.difference $(raw) : $(invariant) ] ;
+
+        #echo "raw:" $(raw) ;
+        #echo "variant:" $(variant) ;
         
-            if $(variant) {
-                raw += $(variant) ;
-            }
-
-            return [ property-set.create $(raw) ] ;
+        # all variants are <relevant> 
+        local relevant ;
+        for local i in $(variant:G) {
+            if $(i) != <relevant> {
+                relevant += [ MATCH "<(.*)>" : $(i) ] ;
+            } 
         }
-
-        # no change
+        
+        if $(invariant) {
+            return [ property-set.create 
+                        [ set.difference $(raw) : $(invariant) ] 
+                        $(variant)
+                        $(relevant:G=relevant)
+                   ] ;
+        }
         else {
-            return $(property-set) ;
+            return [ $(property-set).add-raw $(relevant:G=relevant) ] ;
         }
     }
 

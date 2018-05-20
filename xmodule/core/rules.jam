@@ -236,29 +236,35 @@ register-xfile-rule xlib  ;
 rule xinclude   ( names * : sources * : requirements *
                 : default-build * : usage-requirements * )
 {
+    # get rule-name from call stack (for when it is aliased)
+    local bt = [ BACKTRACE 1 ] ;
+    local rule-name = $(bt[4]) ;
 
     # validate requirements
-    constrained-requirement xinclude xpath      "!" : $(requirements) ;
-    constrained-requirement xinclude xfile-type "!" : $(requirements) ;
+    constrained-requirement $(rule-name) xpath      "!" : $(requirements) ;
+    constrained-requirement $(rule-name) xfile-type "!" : $(requirements) ;
 
     local xincludes = [ constrained-requirement
-                          xinclude xinclude "*" : $(requirements) ] ;
+                          $(rule-name) $(rule-name) "*" : $(requirements) ] ;
     if $(names[2]) && $(xincludes) {
         errors.user-error
-            "In rule 'xinclude' with multiple names"
-          : "<xinclude> feature found in requirements"
-          : "<xinclude> can be only be used when no name, or one name" ;
+            "In rule '$(rule-name)' with multiple names"
+          : "<$(rule-name)> feature found in requirements"
+          : "<$(rule-name)> can be only be used when no name, or one name" ;
     }
 
     # create targets
-    return [ create-export-targets xinclude XINCLUDE : $(names)
+    return [ create-export-targets 
+                  $(rule-name) [ type.type-from-rule-name $(rule-name) ] 
+                : $(names)
                 : $(sources)        : $(requirements)
                 : $(default-build)  : $(usage-requirements) ] ;
 }
 
 
 # make 'xinclude' available everywehre
-IMPORT $(__name__) : xinclude : : xinclude ;
+IMPORT $(__name__) : xinclude : : xinclude       ;
+IMPORT $(__name__) : xinclude : : xsysteminclude ;
 
 
 

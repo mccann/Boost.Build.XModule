@@ -147,6 +147,14 @@ exe             exe19           : src/include-test.c "include" headers ;
 run             exe19           : : : : run19 ;
 
 ##
+## export system-include-dir from xbuild as boost.build target 
+xsysteminclude  sys-include : pkg12 : <name>include ;
+xsysteminclude  sys-headers : pkg12 : <name>headers ;
+
+exe             exe19b          : src/include-test.c sys-include sys-headers ;
+run             exe19b          : : : : run19b ;
+
+##
 ## export include-dir from xbuild as boost.build target -- <xinclude>syntax
 xinclude        include20       : pkg12 : <name>include <name>headers ;
 exe             exe20           : src/include-test.c include20 ;
@@ -161,6 +169,12 @@ run             src/test.c foo22 : : : : run22 ;
 ## test  lib -- directrly from configure file
 lib             foo22b : configure-pkg/configure : <xpath>lib <name>!foo <xinclude>/include <link>static ;
 run             src/test.c foo22b : : : : run22b ;
+
+##
+## test  lib -- directrly from configure file - using <xsystem-include>
+lib             foo22c : configure-pkg/configure : <xpath>lib <name>!foo <xsystem-include>/include <link>static ;
+run             src/test.c foo22c : : : : run22c ;
+
 
 ##
 ## test lib -- directrly from configure file (xdist)

@@ -20,7 +20,7 @@
 
 rule decode-name ( encoded-name )
 {
-    return [ MATCH ^(!|)(|[^#]*[^!#])(!|)(#([^!]*))?$ : $(encoded-name) ] ;
+    return [ MATCH "^(!|)(|[^#]*[^!#])(!|)(#([^!]*))?$" : $(encoded-name) ] ;
 }
 
 # where to put 'so version'
@@ -85,7 +85,7 @@ rule add-prefix-and-suffix ( encoded-name : type ? : property-set mutability )
 #
 rule match-type-decode ( encoded-name )
 {
-    return [ MATCH ^(!?)([^!\\+]+)(\\+?)$ : $(encoded-name) ] ;
+    return [ MATCH "^(!?)([^!\\+]+)(\\+?)$" : $(encoded-name) ] ;
 }
 
 

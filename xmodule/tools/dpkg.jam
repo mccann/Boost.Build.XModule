@@ -33,7 +33,6 @@
 # <xdpkg-requires>      * package requires - package dependencies
 #                         - for syntax:
 #                         - note: this will join multiple properties with ',' and escape "()<>" characters automatically 
-#                         - http://stackoverflow.com/questions/18365600/how-to-manage-multiple-package-dependencies-with-checkinstall
 #
 # <xdpkg-exclude>       * exclude files from package 
 #

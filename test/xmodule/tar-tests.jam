@@ -34,27 +34,27 @@ xrepo tar-4 : bin/tar-test/src.zip ;
 xrepo tar-5 : bin/tar-test/src.tgz ;
 
 # curl & tar test
-xrepo tar-6 : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar ;
-xrepo tar-7 : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.gz ;
-xrepo tar-8 : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 ;
-xrepo tar-9 : file://$(TAR_TEST_CUR)/bin/tar-test/src.zip ;
-xrepo tar-A : file://$(TAR_TEST_CUR)/bin/tar-test/src.tgz ;
+xrepo tar-6 : "file://$(TAR_TEST_CUR)/bin/tar-test/src.tar" ;
+xrepo tar-7 : "file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.gz" ;
+xrepo tar-8 : "file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2" ;
+xrepo tar-9 : "file://$(TAR_TEST_CUR)/bin/tar-test/src.zip" ;
+xrepo tar-A : "file://$(TAR_TEST_CUR)/bin/tar-test/src.tgz" ;
 
 
 # get a file from archive and compile it
-xfile tar-B : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 
+xfile tar-B : "file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2" 
             : <name>src/hello-world.c
             ;
 run   tar-B : : : : run-tar-B ;
 
 
 # tar-B inline
-run   [ xfile src/hello-world.c : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 ] 
+run   [ xfile src/hello-world.c : "file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2" ] 
       : : : : run-tar-B-inline ;
 
 
 # like tar-B, but with cast
-xfile tar-C : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 
+xfile tar-C : "file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2" 
             : <name>src/hello-world.h
               <xfile-type>.c
             ;
@@ -63,7 +63,7 @@ run   tar-C : : : : run-tar-C ;
 
 # tar-C inline
 run   [ xfile src/hello-world.h 
-        : file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2 
+        : "file://$(TAR_TEST_CUR)/bin/tar-test/src.tar.bz2"
         : <xfile-type>.c
       ] 
       : : : : run-tar-C-inline ;
