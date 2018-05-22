@@ -13,6 +13,7 @@ class xmodule-generator : generator
     import tty ;
     import utility ;
     import xmodule : caller-instance-of-class ;
+    import feature ;
 
     # return empty value to indicate that the inputs are VALID
     # non-empty value will be treated as --debug-generators output string
@@ -49,6 +50,7 @@ class xmodule-generator : generator
     {
         local raw   = [ $(property-set).raw ] ;
 
+
         local rule filter ( feature : patterns * )
         {
             local result ;
@@ -63,36 +65,54 @@ class xmodule-generator : generator
             return $(result) ;
         }
 
+        local relevant-feature ;
+        if [ feature.valid <relevant> ] {
+            relevant-feature = relevant ; 
+        }
+
         # these basic boost.build properties are never filtered 
-        xvariant += use dependency implicit-dependency location-prefix relevant ;
+        xvariant += use dependency implicit-dependency location-prefix $(relevant-feature) ;
+
 
         # this basic xmodule property is not filtered
         xvariant += xworkspace ;
 
         local variant   = [ filter <xvariant>   : $(xvariant)   ] ;
+        
+        # <relevant> feature basically works like non-regex <xvariant>
+        # use it too.
+        if $(relevant-feature) {
+            variant += [ filter <relevant> ] ;
+        }
+
         local invariant = [ filter <xinvariant> : $(xinvariant) ] ;
  
 
+        local relevant-props ;
+        if $(relevant-feature) {
+            # all variants are <relevant> 
+            for local i in $(variant:G) {
+                if $(i) != <relevant>  && ! free in [ feature.attributes $(i) ] {
+                    relevant-props += [ MATCH ^<(.*)>$ : $(i) ] ;
+                } 
+            }
+        }
+
         #echo "raw:" $(raw) ;
         #echo "variant:" $(variant) ;
+        #echo "invariant:" $(invariant) ;
+        #echo "relevant-props:" <relevant>$(relevant-props) ;
         
-        # all variants are <relevant> 
-        local relevant ;
-        for local i in $(variant:G) {
-            if $(i) != <relevant> {
-                relevant += [ MATCH "<(.*)>" : $(i) ] ;
-            } 
-        }
-        
+
         if $(invariant) {
             return [ property-set.create 
                         [ set.difference $(raw) : $(invariant) ] 
                         $(variant)
-                        $(relevant:G=relevant)
+                        <relevant>$(relevant-props)
                    ] ;
         }
         else {
-            return [ $(property-set).add-raw $(relevant:G=relevant) ] ;
+            return [ $(property-set).add-raw <relevant>$(relevant-props) ] ;
         }
     }
 

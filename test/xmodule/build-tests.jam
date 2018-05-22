@@ -161,28 +161,28 @@ exe             exe20           : src/include-test.c include20 ;
 run             exe20           : : : : run20 ;
 
 ##
-## test xlib -- directrly from configure file
+## test xlib -- directly from configure file
 xlib            foo22 : configure-pkg/configure : <xpath>lib <name>!foo <xinclude>/include <link>static ;
 run             src/test.c foo22 : : : : run22 ;
 
 ##
-## test  lib -- directrly from configure file
+## test  lib -- directly from configure file
 lib             foo22b : configure-pkg/configure : <xpath>lib <name>!foo <xinclude>/include <link>static ;
 run             src/test.c foo22b : : : : run22b ;
 
 ##
-## test  lib -- directrly from configure file - using <xsystem-include>
+## test  lib -- directly from configure file - using <xsystem-include>
 lib             foo22c : configure-pkg/configure : <xpath>lib <name>!foo <xsystem-include>/include <link>static ;
 run             src/test.c foo22c : : : : run22c ;
 
 
 ##
-## test lib -- directrly from configure file (xdist)
+## test lib -- directly from configure file (xdist)
 lib             foo23 : [ xdist : configure-pkg/configure ] : <xpath>lib <name>!foo <xinclude>/include <link>static ;
 run             src/test.c foo23 : : : : run23 ;
 
 ##
-## test lib -- directrly from configure file (xbuild)
+## test lib -- directly from configure file (xbuild)
 lib             foo24 : [ xbuild : configure-pkg/configure ] : <xpath>lib <name>!foo <xinclude>/include <link>static ;
 run             src/test.c foo24 : : : : run24 ;
 
@@ -270,7 +270,7 @@ compile         src/hello-h.c   : <implicit-dependency>foo/hello.h : compile35 ;
 
 ##
 ## test xbuild using cmake
-xbuild  pkg36       : cmake-pkg/CMakeLists.txt ;
+xbuild  pkg36       : cmake-pkg/CMakeLists.txt : <xvariant>link ;
 xfile   pkg36.built : pkg36 : <name>CMakeFiles/foo.dir/foo.c.o  ;
 lib     pkg36.lib   : pkg36 : <name>foo : : <include>cmake-pkg  ;
 run     src/test.c  pkg36.lib : : : <link>static : run36-static ;
@@ -278,8 +278,8 @@ run     src/test.c  pkg36.lib : : : <link>shared : run36-shared ;
 
 ##
 ## test xdist using cmake, with full path <name>
-xdist   pkg37       : cmake-pkg/CMakeLists.txt ;
-lib     pkg37.lib   : pkg37 : <name>lib/foo <xinclude>include ;
+xdist   pkg37       : cmake-pkg/CMakeLists.txt : <xvariant>link ;
+lib     pkg37.lib   : pkg37 : <name>lib/foo <xinclude>include  ;
 run     src/test.c  pkg37.lib : : : <link>static : run37-static ;
 run     src/test.c  pkg37.lib : : : <link>shared : run37-shared ;
 

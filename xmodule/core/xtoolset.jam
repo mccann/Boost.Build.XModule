@@ -24,9 +24,14 @@ local rule xtoolset-cache ( action : property-set )
             xmodule.basic-generator-error "missing <toolset>" : $(targets) ;
         }
 
+        local version = [ $(toolset-ps).get <toolset-$(toolset):version> ] ;
+        if ! $(version) {
+            xmodule.basic-generator-error "missing <toolset-$(toolset):version> ! This can happen when using defaulted toolset, try explicit toolset=XXXXX" : $(targets) ;
+        }
+
+
         XTOOLSET         on $(cache) = $(toolset) ; 
-        XTOOLSET_VERSION on $(cache) = [ $(property-set).get 
-                                         <toolset-$(toolset):version> ] ;
+        XTOOLSET_VERSION on $(cache) = $(version) ;
 
         # set toolset variables on fake target 'cache'
         toolset.set-target-variables 
