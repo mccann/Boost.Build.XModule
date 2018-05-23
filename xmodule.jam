@@ -139,7 +139,7 @@ if $(__name__) != xmodule {
         modules.load xmodule-$(tool) : $(__file__:D)/xmodule/tools/$(tool).jam ;
     }
 
-    for local tool in patch make cmake configure git dpkg curl tar b2 {
+    for local tool in patch make cmake configure git dpkg curl tar b2 npm {
         import-tool $(tool) ;
     }
 }
