@@ -1,0 +1,176 @@
+# Copyright 2018 DeviantArt Inc.
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
+
+
+# This module supports the 'xm' External Module build system
+# Specifically, responsible for installing and running npm package builds
+
+import type ;
+import "class" : new ;
+import generators ;
+import toolset ;
+import feature ;
+import xmodule ;
+
+# register npm specific types
+type.register NPM_PACKAGE_JSON ;
+type.register NPM_INSTALL ;
+type.register NPM_INSTALL_LOG ;
+type.register NPM_SCRIPT  ;
+type.register NPM_SCRIPT_LOG  ;
+
+# register filenames associated with npm
+xmodule.register-filenames package.json : NPM_PACKAGE_JSON ;
+
+xmodule.register-xmodule-rules npm-install ;
+
+xmodule.register-xmodule-rules npm-script ;
+
+
+##################################################################
+##
+##   npm npm-install generator
+##
+##################################################################
+
+class npm-install-generator : xmodule-generator
+{
+    import property-set ;
+    import path ;
+    import xmodule : refine-source-file-hash-dependencies ;
+
+    rule generated-targets ( NPM_PACKAGE_JSON : property-set : project name ? )
+    {
+        # run 'npm install' in src dir
+        
+        local package-json      = [ $(NPM_PACKAGE_JSON).name ] ;
+        local package-json-path = [ path.root [ $(NPM_PACKAGE_JSON).path ]
+                                              [ path.pwd ] ] ;
+
+        local a =   [ new non-scanning-action $(NPM_PACKAGE_JSON)
+                         : xmodule-npm.install : $(property-set) ] ;
+
+        local t =   [ new file-target $(name)/log/npm-install.log
+                        exact : NPM_INSTALL_LOG : $(project) : $(a) ] ;
+
+        return  [ property-set.empty ] 
+                [ virtual-target.register
+                    [ new typed-path-target 
+                          $(package-json-path) 
+                        : NPM_INSTALL : $(project)
+                        : # include json here for npm.script
+                          [ new non-scanning-action $(NPM_PACKAGE_JSON) $(t) 
+                            : xmodule-npm.finalize
+                            : $(property-set) ] 
+                ]   ] ;
+
+    }
+}
+
+# register generator
+generators.register [ new npm-install-generator install
+                          : NPM_PACKAGE_JSON : NPM_INSTALL  ] ;
+
+# npm install option
+feature.feature npm-install-arg  : : free ;
+
+toolset.flags   $(__name__).install OPTIONS : <npm-install-arg> ;
+
+
+XLOG = [ xmodule.logfile-action ] ;
+
+actions install
+{
+    $(XLOG[1])="$(<[1])"
+    (
+        set -ex
+        : npm install action
+        :  - from: $PWD
+        :
+        cd $(>[1]:D)
+        npm install "$(OPTIONS)"
+
+    ) $(XLOG[2])
+}
+
+
+##################################################################
+##
+##   npm npm-script generator
+##
+##################################################################
+
+class npm-script-generator : xmodule-generator
+{
+    import property-set ;
+    import path ;
+    import xmodule : refine-source-file-hash-dependencies ;
+
+    rule generated-targets ( NPM_INSTALL : property-set : project name  )
+    {
+        # add <name> if not already present
+        local name-prop = [ $(property-set).get <name> ] ;
+        if ! $(name-prop) {
+            property-set = [ $(property-set).add-raw <name>$(name) ] ;
+        }
+
+        # scripts can depend upon all sources
+        local src-action = [ $(NPM_INSTALL).action ] ;
+        property-set = [ refine-source-file-hash-dependencies
+                    $(property-set) $(project) $(name)
+                    : [ $(src-action).sources ] ] ;
+
+        # run 'npm run-script' in src dir
+        
+        local a  =  [ new non-scanning-action $(NPM_INSTALL)
+                         : xmodule-npm.script : $(property-set) ] ;
+
+        local t =   [ new file-target $(name)/log/npm-run-script-$(name).log
+                        exact : NPM_SCRIPT_LOG : $(project) : $(a) ] ;
+
+
+        return  [ property-set.empty ] 
+                [ virtual-target.register
+                    [ new typed-path-target 
+                          [ $(NPM_INSTALL).path ]
+                        : NPM_SCRIPT : $(project)
+                        : [ new non-scanning-action $(t) 
+                            : xmodule-npm.finalize
+                            : $(property-set) ] 
+                ]   ] ;
+    }
+}
+
+# register generator
+generators.register [ new npm-script-generator script
+                          : NPM_INSTALL : NPM_SCRIPT  ] ;
+
+# npm script option
+feature.feature npm-script-arg  : : free ;
+
+toolset.flags   $(__name__).script NAME    : <name> ;
+toolset.flags   $(__name__).script OPTIONS : <npm-script-arg> ;
+
+XLOG = [ xmodule.logfile-action ] ;
+
+actions script
+{
+    $(XLOG[1])="$(<[1])"
+    (
+        set -ex
+        : npm run-script $(NAME) action
+        :  - from: $PWD
+        :
+        cd $(>[1])
+        npm run-script $(NAME) "$(OPTIONS)"
+
+    ) $(XLOG[2])
+}
+
+
+
+actions finalize
+{
+    # do nothing
+}
