@@ -78,15 +78,7 @@ class xmodule-generator : generator
         xvariant += xworkspace ;
 
         local variant   = [ filter <xvariant>   : $(xvariant)   ] ;
-        
-        # <relevant> feature basically works like non-regex <xvariant>
-        # use it too.
-        if $(relevant-feature) {
-            variant += [ filter <relevant> ] ;
-        }
-
         local invariant = [ filter <xinvariant> : $(xinvariant) ] ;
- 
 
         local relevant-props ;
         if $(relevant-feature) {
