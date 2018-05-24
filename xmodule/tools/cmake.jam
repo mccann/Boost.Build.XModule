@@ -47,10 +47,13 @@ rule cmake-configure ( targets * : sources * : properties * )
         : $(properties)
         ;
 
-    if <variant>debug in $(properties) {
-        OPTIONS on $(targets) += -DCMAKE_BUILD_TYPE=Debug ;
-    }
-    else if <variant>sanitize in $(properties) {
+    # look for what appears to be '<variant>debug' by its components
+    # allows for variants that extend debug to be treated as debug as well
+    if <optimization>off      in $(properties)
+    && <debug-symbols>on      in $(properties)
+    && <inlining>off          in $(properties)
+    && <runtime-debugging>on  in $(properties)
+    {
         OPTIONS on $(targets) += -DCMAKE_BUILD_TYPE=Debug ;
     }
     # default to Release
