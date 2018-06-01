@@ -67,6 +67,7 @@ rule xtoolset-action-var ( action : var : property-set )
 #
 
 .xtoolset-config.items = 
+    binpath
     cc       
     cxx
     ar
@@ -80,6 +81,7 @@ rule xtoolset-action-var ( action : var : property-set )
     version
 ;
 
+.xtoolset-config.action-var.binpath      = compile.c    CONFIG_COMMAND bin-path ;
 .xtoolset-config.action-var.cc           = compile.c    CONFIG_COMMAND cc-tool ;
 .xtoolset-config.action-var.cflags       = compile.c    OPTIONS        ;
 .xtoolset-config.action-var.cxx          = compile.c++  CONFIG_COMMAND ;
@@ -115,6 +117,19 @@ rule xtoolset-config ( config : property-set )
         errors.error "unknown / unmapped config:" $(feature:E=) ;
     }
 }   
+
+## BINPATH just needs to be the basepath 
+rule bin-path ( results * : property-set ) 
+{
+    # use last non flag 
+    local result ;
+    for local i in $(results) {
+        if ! [ MATCH "^-(.*)$" : $(i) ] {
+            result = $(i) ;
+        }
+    }
+    return $(result:D) ;
+}
 
 ## CC needs to NOT be a C++ compiler for cmake/other tools
 rule cc-tool ( results * : property-set ) 
@@ -237,7 +252,7 @@ rule xtoolset-config-items-on-targets   ( targets *
 #       set XTOOLSET_ variables on targets from properties
 #        - <xtoolset-inherit|forfeit> features control which variables are set
 #
-rule xtoolset-config-targets ( targets * : properties * )
+rule xtoolset-config-targets ( targets * : properties * : no-fixup-cmd-flags ? )
 {
     local ps = [ property-set.create $(properties) ] ;
 
@@ -259,9 +274,11 @@ rule xtoolset-config-targets ( targets * : properties * )
     # semi-workaround CMAKE's assumption that CC/CXX are just "a b" pattern, no flags
     # see xtoolset-fixup-cmd-flags for more info
     #
-    xtoolset-fixup-cmd-flags $(targets) : CC   CFLAGS   ;
-    xtoolset-fixup-cmd-flags $(targets) : CXX  CXXFLAGS ;
 
+    if ! $(no-fixup-cmd-flags) {
+        xtoolset-fixup-cmd-flags $(targets) : CC   CFLAGS   ;
+        xtoolset-fixup-cmd-flags $(targets) : CXX  CXXFLAGS ;
+    }
 }
 
 
