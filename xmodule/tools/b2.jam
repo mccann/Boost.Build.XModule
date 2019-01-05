@@ -278,6 +278,10 @@ toolset.flags   $(__name__).build DEFAULT_NUM_JOBS  :
                                     [ build-jobs-arg.external-build-jobs-arg ]
                                                     ;
 
+rule build ( targets * :  sources * : properties * )
+{
+    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
+}
 
 actions build
 {
@@ -285,14 +289,15 @@ actions build
     (
         set -e 
         : b2 build action
-        cd "$(>[1]:D)"
         echo 'build && install'
         set -x
+        cd "$(>[1]:D)"
         $(B2_SELF) --user-config="$(>[4]:R=$(.CWD))"                    \
                    -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS))                  \
                    $(BUILD_DIR_ARGS:E=--build-dir=)"$(>[2]:R=$(.CWD))"  \
                    $(DIST_PATH_ARGS)"$(>[3]:R=$(.CWD))"                 \
-                   "$(TARGETS)"
+                   "$(TARGETS)" \
+                   toolset=$(XTOOLSET_TOOLSET)
 
     ) $(XLOG[2])
 }
