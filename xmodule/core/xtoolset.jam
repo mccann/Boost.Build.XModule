@@ -29,13 +29,18 @@ local rule xtoolset-cache ( action : property-set )
             xmodule.basic-generator-error "missing <toolset-$(toolset):version> ! This can happen when using defaulted toolset, try explicit toolset=XXXXX" : $(targets) ;
         }
 
+        local platform = [ $(toolset-ps).get <toolset-$(toolset):platform> ] ;
+
+
+        local complete-toolset = $(toolset) $(platform) ;
+        complete-toolset = $(complete-toolset:J=-) ;
 
         XTOOLSET         on $(cache) = $(toolset) ; 
         XTOOLSET_VERSION on $(cache) = $(version) ;
 
         # set toolset variables on fake target 'cache'
         toolset.set-target-variables 
-                $(toolset).$(action) 
+                $(complete-toolset).$(action) 
                 $(cache) 
             :   $(toolset-ps) ;
 
@@ -104,7 +109,7 @@ rule xtoolset-config ( config : property-set )
                             $(action-var[1]) 
                         : $(action-var[2]) 
                         : $(property-set) ] ;
-
+        
         if $(action-var[3]) {
             return [ $(action-var[3]) $(result) : $(property-set) ] ; 
         }
@@ -154,7 +159,14 @@ rule ld-tool ( results * : property-set )
         results += [ xtoolset-config linkflags : $(property-set) ] ; 
 
         # add print-prog-name
-        results += -print-prog-name=ld ;
+        # clang wants the use-ld argument
+        if [ MATCH "(clang\\+\\+$)" : $(results) ] {
+            local tool = [ MATCH "-fuse-ld=(.*)" : $(results) ] ;
+            results += -print-prog-name=$(tool) ;
+        }
+        else {
+            results += -print-prog-name=ld ;
+        }
 
         $(key) = [ SHELL $(results:J=" ") : strip-eol ] ;
     }
