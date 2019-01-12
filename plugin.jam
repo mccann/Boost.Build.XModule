@@ -12,6 +12,11 @@ import feature ;
 
 type.register DYNAMIC_PLUGIN : : SHARED_LIB ;
 
-feature.feature fpic : default on : optional propagated composite  ;
+feature.feature fpic               : off on : optional composite   ;
+feature.feature allow-static-fpic  : off on : optional incidental  ;
+feature.feature dynamic-plugin     : off on : incidental composite ;
+feature.feature dynamic-plugin-dep : off on : optional propagated incidental  ;
 
-feature.compose <fpic>on : <cflags>-fPIC ;
+feature.compose <fpic>on            : <relevant>fpic <cflags>-fPIC ;
+feature.compose <dynamic-plugin>on  : <link>shared <dynamic-plugin-dep>on ;
+
