@@ -75,7 +75,9 @@ feature xb2-bootstrap           : : free dependency incidental ;
 feature xb2-bootstrap-arg       : : free incidental ; 
 feature xb2-bootstrap-build-dir-arg  : : free incidental ; 
 feature xb2-bootstrap-dist-arg  : : free incidental ; 
+feature xb2-bootstrap-output    : : free incidental ; 
 feature xb2-toolset-options     : : free incidental ;
+feature xb2-build-bootstrap-output-arg : : free incidental ;
 feature xb2-build-dir-arg       : : free incidental ;
 feature xb2-dist-arg            : : free incidental ;
 
@@ -118,7 +120,7 @@ class xb2-build-generator : xmodule-generator
                                 : .* 
                               ] 
                             ] ;
-
+    
         # get/construct root locations
         local bld-root  = [ $(workspace).xroot XBUILD : build ] ;
         local dst-root  = [ $(workspace).xroot XDIST  : local ] ;
@@ -214,11 +216,11 @@ actions bootstrap
     (
         set -e -x
         : b2 bootstrap action
-        cd "$(>[2]:D)"
-        ./"$(>[1]:D=)"  --with-bjam=$(B2_SELF)              \
-                        $(BLD_OPTIONS)"$(>[3]:R=$(.CWD))"   \
-                        $(DIST_OPTIONS)"$(>[4]:R=$(.CWD))"  \
-                        $(OPTIONS)
+        cd "$(>[3]:R=$(.CWD))" 
+        "$(>[1]:R=$(.CWD))" --with-bjam=$(B2_SELF)              \
+                            $(BLD_OPTIONS)"$(>[3]:R=$(.CWD))"   \
+                            $(DIST_OPTIONS)"$(>[4]:R=$(.CWD))"  \
+                            $(OPTIONS)
     ) $(XLOG[2])
 }
 
@@ -270,6 +272,9 @@ generators.register [ new xb2-build-generator xmodule-b2.jamfile-xbuild
 
 toolset.flags   $(__name__).build TARGETS           : <xbuild-arg>             ;
 toolset.flags   $(__name__).build BUILD_DIR_ARGS    : <xb2-build-dir-arg>      ;
+toolset.flags   $(__name__).build BOOTSTRAP_OUTPUT  : <xb2-bootstrap-output>   ;
+toolset.flags   $(__name__).build BOOTSTRAP_OUTPUT_ARG  
+                                                    : <xb2-bootstrap-output-arg>   ;
 toolset.flags   $(__name__).build DIST_PATH_ARGS    : <xb2-dist-arg>           ;
 toolset.flags   $(__name__).build NUM_JOBS          : <xbuild-jobs>            ;
 toolset.flags   $(__name__).build JAM_SEMAPHORE     : XMODULE-BUILD-SEMAPHORE  ;
@@ -292,13 +297,13 @@ actions build
         echo 'build && install'
         set -x
         cd "$(>[1]:D)"
-        $(B2_SELF) --user-config="$(>[4]:R=$(.CWD))"                    \
-                   -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS))                  \
-                   $(BUILD_DIR_ARGS:E=--build-dir=)"$(>[2]:R=$(.CWD))"  \
-                   $(DIST_PATH_ARGS)"$(>[3]:R=$(.CWD))"                 \
+        $(B2_SELF) --user-config="$(>[4]:R=$(.CWD))" \
+                   $(BOOTSTRAP_OUTPUT_ARG:E=--project-config=)"$(>[2]:R=$(.CWD))/$(BOOTSTRAP_OUTPUT:E=project-config.jam)" \
+                   $(BUILD_DIR_ARGS:E=--build-dir=)"$(>[2]:R=$(.CWD))" \
+                   -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) \
+                   $(DIST_PATH_ARGS)"$(>[3]:R=$(.CWD))" \
                    "$(TARGETS)" \
                    toolset=$(XTOOLSET_TOOLSET)
-
     ) $(XLOG[2])
 }
 
