@@ -191,7 +191,7 @@ rule setup-makefile-generate-action ( configure-action
     }
 
     # setup toolset
-    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
+    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) : ld ;
 
     # regular options
     OPTIONS on $(targets) = [ MATCH ^<xconfig>(.*)$ : $(properties) ] ;
@@ -369,7 +369,7 @@ actions build
 rule inplace-build ( targets * : sources * : properties * )
 {
     # setup toolset
-    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
+    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) : ld ;
 
     # let env override?
     setup-build-env  $(targets) : $(properties) ;

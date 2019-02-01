@@ -267,12 +267,12 @@ rule xtoolset-config-items-on-targets   ( targets *
 #       set XTOOLSET_ variables on targets from properties
 #        - <xtoolset-inherit|forfeit> features control which variables are set
 #
-rule xtoolset-config-targets ( targets * : properties * : no-fixup-cmd-flags ? )
+rule xtoolset-config-targets ( targets * : properties * : default-forfeit * )
 {
     local ps = [ property-set.create $(properties) ] ;
 
     xtoolset-config-items-on-targets  $(targets) 
-                                    : [ xtoolset-filter-items $(ps) ]  
+                                    : [ xtoolset-filter-items $(ps) : : $(default-forfeit) ]  
                                     : $(ps) ;
 
 

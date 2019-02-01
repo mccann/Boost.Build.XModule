@@ -228,7 +228,7 @@ toolset.flags  $(__name__).configure-toolset OPTIONS : <xb2-toolset-options> ;
 
 rule configure-toolset ( targets * :  sources * : properties * )
 {
-    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
+    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) : ld ;
 }
 
 actions configure-toolset
@@ -285,7 +285,7 @@ toolset.flags   $(__name__).build DEFAULT_NUM_JOBS  :
 
 rule build ( targets * :  sources * : properties * )
 {
-    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
+    xmodule.xtoolset-config-targets $(targets[1]) : $(properties) : ld ;
 }
 
 actions build
