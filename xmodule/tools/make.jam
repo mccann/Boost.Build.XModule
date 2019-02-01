@@ -354,11 +354,12 @@ actions build
 {
     $(XLOG[1])="$(<[1])"
     {
+        # Error & logging
+        set -e -x 
         : set env variables 
         $(.EXPORT)$(ENV_VARS)$(.NEWLINE)
     
         : xmake build action
-        echo make -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
         make -C "$(>[1]:D)" -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
 
     } $(XLOG[2])
@@ -378,6 +379,8 @@ actions inplace-build
 {
     $(XLOG[1])="$(<[1])"
     {
+        # Error & logging
+        set -e -x 
         : set env variables 
         $(.EXPORT)$(ENV_VARS)$(.NEWLINE)
     
@@ -393,7 +396,6 @@ actions inplace-build
         $(.EXPORT)LDFLAGS="$(XTOOLSET_LINKFLAGS:J= )" 
     
         : xmake build action
-        echo make -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
         make -C "$(>[1]:D)" -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
 
     } $(XLOG[2])
@@ -489,8 +491,9 @@ actions install
 {
     $(XLOG[1])="$(<[1])"
     {
+        # Error & logging
+        set -e -x 
         : xmake install action
-        echo make -j$(.SPACE)$(XDIST_JOBS) "$(TARGETS:E=install)"
         make DESTDIR="$(>[3]:R=$(.CWD))" -C "$(>[1])" -j$(.SPACE)$(XDIST_JOBS)  "$(TARGETS:E=install)"
         
     } $(XLOG[2])

@@ -75,6 +75,7 @@ rule xtoolset-action-var ( action : var : property-set )
     binpath
     cc       
     cxx
+    as
     ar
     nm
     ld
@@ -91,6 +92,7 @@ rule xtoolset-action-var ( action : var : property-set )
 .xtoolset-config.action-var.cflags       = compile.c    OPTIONS        ;
 .xtoolset-config.action-var.cxx          = compile.c++  CONFIG_COMMAND ;
 .xtoolset-config.action-var.cxxflags     = compile.c++  OPTIONS        ;
+.xtoolset-config.action-var.as           = compile.asm  CONFIG_COMMAND ;
 .xtoolset-config.action-var.ar           = archive      .AR            ;
 .xtoolset-config.action-var.ranlib       = archive      .RANLIB        ;
 .xtoolset-config.action-var.nm           = archive      .AR            nm-tool ;
@@ -162,6 +164,7 @@ rule ld-tool ( results * : property-set )
         # clang wants the use-ld argument
         if [ MATCH "(clang\\+\\+$)" : $(results) ] {
             local tool = [ MATCH "-fuse-ld=(.*)" : $(results) ] ;
+            tool ?= ld ;
             results += -print-prog-name=$(tool) ;
         }
         else {
@@ -287,10 +290,10 @@ rule xtoolset-config-targets ( targets * : properties * : no-fixup-cmd-flags ? )
     # see xtoolset-fixup-cmd-flags for more info
     #
 
-    if ! $(no-fixup-cmd-flags) {
-        xtoolset-fixup-cmd-flags $(targets) : CC   CFLAGS   ;
-        xtoolset-fixup-cmd-flags $(targets) : CXX  CXXFLAGS ;
-    }
+   # if ! $(no-fixup-cmd-flags) {
+   #     xtoolset-fixup-cmd-flags $(targets) : CC   CFLAGS   ;
+   #     xtoolset-fixup-cmd-flags $(targets) : CXX  CXXFLAGS ;
+   # }
 }
 
 

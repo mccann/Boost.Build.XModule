@@ -93,6 +93,7 @@ actions cmake
         cmake   -DCMAKE_AR="$(XTOOLSET_AR:J= )" \
                 -DCMAKE_RANLIB="$(XTOOLSET_RANLIB:J= )" \
                 -DCMAKE_NM="$(XTOOLSET_NM:J= )" \
+                -DCMAKE_LINKER="$(XTOOLSET_LD:J= )" \
                 -DCMAKE_EXPORT_COMPILE_COMMANDS=1 \
                 $(PREFIX_ARG)="$(>[3]:R=$(.CWD))" \
                 $(OPTIONS) \
