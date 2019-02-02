@@ -279,12 +279,12 @@ toolset.flags   $(__name__).build DIST_PATH_ARGS    : <xb2-dist-arg>           ;
 toolset.flags   $(__name__).build NUM_JOBS          : <xbuild-jobs>            ;
 toolset.flags   $(__name__).build JAM_SEMAPHORE     : XMODULE-BUILD-SEMAPHORE  ;
 
-toolset.flags   $(__name__).build DEFAULT_NUM_JOBS  : 
-                                    [ build-jobs-arg.external-build-jobs-arg ]
-                                                    ;
 
 rule build ( targets * :  sources * : properties * )
 {
+    # set default num jobs
+    DEFAULT_NUM_JOBS on $(targets) = [ build-jobs-arg.external-build-jobs-arg ] ;
+
     xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
 }
 
