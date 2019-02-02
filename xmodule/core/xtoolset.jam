@@ -161,16 +161,11 @@ rule ld-tool ( results * : property-set )
         results += [ xtoolset-config linkflags : $(property-set) ] ; 
 
         # add print-prog-name
-        # clang wants the use-ld argument
-        if [ MATCH "(clang\\+\\+$)" : $(results) ] {
-            local tool = [ MATCH "-fuse-ld=(.*)" : $(results) ] ;
-            tool ?= ld ;
-            results += -print-prog-name=$(tool) ;
-        }
-        else {
-            results += -print-prog-name=ld ;
-        }
-
+        local tool = [ MATCH "-fuse-ld=(.*)" : $(results) ] ;
+        tool = ld.$(tool) ; 
+        tool ?= ld ;
+        results += -print-prog-name=$(tool) ;
+        
         $(key) = [ SHELL $(results:J=" ") : strip-eol ] ;
     }
     return $($(key)) ;
