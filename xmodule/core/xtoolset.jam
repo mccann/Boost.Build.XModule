@@ -157,11 +157,21 @@ rule ld-tool ( results * : property-set )
     local key = .ld-tool.$(results:J=.) ;
     if ! $($(key)) 
     {
-        # need flags!
-        results += [ xtoolset-config linkflags : $(property-set) ] ; 
+        
+        # if linkflags are inherited, get them from toolset
+        if linkflags in [ xtoolset-filter-items $(property-set) ] {
+            results += [ xtoolset-config linkflags : $(property-set) ] ; 
+        }
+
+        # add <xtoolset-linkflags> from property-set
+        results += [ $(property-set).get <xtoolset-linkflags> ] ;
 
         # add print-prog-name
         local tool = [ MATCH "-fuse-ld=(.*)" : $(results) ] ;
+        # use last one
+        while $(tool[2]) {
+            tool = $(tool[2-]) ;
+        }
         tool = ld.$(tool) ; 
         tool ?= ld ;
         results += -print-prog-name=$(tool) ;
