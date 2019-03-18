@@ -1,0 +1,672 @@
+#!/bin/bash
+
+UNAME=`uname`;
+
+display_usage() { 
+    echo "Usage: $0 <user@host:repository_path> [ --sync-only | [--json-bear] [ --no-sync ] [ --alt-local=ALTERNATE_LOCAL_PATH ] [ bjam_arg1 [ bjam_argN ...] ] ]"
+    echo ""
+    echo "Alternatively, export RSB_REMOTE to remote repo and skip first parameter"
+    echo ""
+    echo "This script uses rsync to copy tracked files of current path git repository."
+    echo "Followed by invoking bjam in the same relative path on the remote repository via ssh"
+    echo "File paths of compilation processs are mapped to local paths."
+    echo ""
+} 
+
+cleanup_and_error()
+{
+    if [ "$1" ] ; then
+        echo $*
+        echo 
+    fi
+    rm_tmp_files
+    exit 1
+}
+
+error_and_usage() {
+    echo $*
+    echo ""
+    display_usage
+    cleanup_and_error
+}
+
+check_error_and_usage() {
+    if [ $? -ne 0 ]; then
+        error_and_usage "$@"
+    fi
+}
+
+check_error() {
+    if [ $? -ne 0 ]; then
+        cleanup_and_error "$@"
+    fi
+}
+
+
+declare -a tmp_files
+
+make_tmp_file()
+{
+    local tmp_file=$(mktemp -t "rsb_${1}.XXXXXXXXXX" )
+    tmp_files=( "${tmp_files[@]}" "$tmp_file" )
+    eval $1="\$tmp_file"
+}
+
+rm_tmp_files()
+{
+    for f in "${tmp_files[@]}" ; do
+        #echo removing $f
+        rm "$f"
+    done
+}
+
+parse_remote_url() {
+    local parts=(${1//:/ })
+    remote_host=${parts[0]}
+    remote_repo_arg=${parts[1]}
+    
+    
+    if [ ${remote_host:0:1} == "-" ]; then
+        error_and_usage "Error: remote repo argument doesn't look like host! (starts with -) ($1)"
+    fi
+
+    if [ -z $remote_repo_arg ]; then
+        error_and_usage "Error: remote repo argument doesn't look like host! (no path) ($1)"
+    fi
+}
+
+# populate arrays
+declare -a local_repo_names
+declare -a local_repo_origins
+declare -a local_repo_relpaths
+declare -a local_repo_revisions
+declare -a local_repo_paths
+
+declare -a remote_repo_names
+declare -a remote_repo_origins
+declare -a remote_repo_relpaths
+declare -a remote_repo_revisions
+declare -a remote_repo_paths
+
+
+get_repos()
+{
+
+    #get remote files -- optimisticly, before verifying a proper path, etc
+    if [ "${nosync}" == "true" ]; then
+        ( true ) & # launch something to keep job-numbers as expected
+    else 
+        make_tmp_file tmp_rsync_all_files
+        (
+            ssh "$remote_host" \
+            "cd '$remote_repo_arg' && git diff HEAD --name-only --no-renames --ignore-submodules -z && git submodule --quiet foreach --recursive 'git diff HEAD --name-only --no-renames --ignore-submodules -z | xargs --no-run-if-empty -0 -n1 printf \"\$path/%s\\0\"'" \
+            | tr '\n' '\1' | tr '\0' '\n' > $tmp_rsync_all_files 2>/dev/null
+        ) &
+    fi
+
+    local_repo_canon=$(git rev-parse --show-toplevel)
+
+    if [ ${alt_local} ]; then
+        if [[ ! "${alt_local}" -ef "${local_repo_canon}" ]] ; then
+            cleanup_and_error "alt-local specified \"${alt_local}\" does not match the given local repository"
+        fi
+    fi
+
+    # get local repos
+    make_tmp_file local_repos
+    (
+        cd $local_repo_canon \
+        && printf ".|%s|%s|%s|%s\n" `git ls-remote --get-url origin` "`git rev-parse --show-prefix`" `git rev-parse HEAD --show-toplevel` \
+        && git submodule --quiet foreach --recursive 'printf "$name|%s|$path/|%s|%s\n" `git ls-remote --get-url origin` `git rev-parse HEAD --show-toplevel`' 
+    )  > "$local_repos" &
+    
+    
+    # get remote repos
+    make_tmp_file remote_repos
+    ssh $remote_host \
+        "cd '$remote_repo_arg' && printf \".|%s|%s|%s|%s\n\" \`git ls-remote --get-url origin\` \"\`git rev-parse --show-prefix\`\" \`git rev-parse HEAD --show-toplevel\` && git submodule --quiet foreach --recursive 'printf \"\$name|%s|\$path/|%s|%s\n\" \`git ls-remote --get-url origin\` \`git rev-parse HEAD --show-toplevel\`'" \
+        2>/dev/null > "$remote_repos"  &
+
+  
+    #gather output, and error check
+    wait %2
+    check_error_and_usage "Error: current working directory does not appear to be part of a git repository!"
+    local_repos=$(sort $local_repos)
+    
+    wait %3
+    check_error_and_usage "Error: Unable to verify remote path! May not be a git respository."
+    remote_repos=$(sort $remote_repos)
+  
+    
+    # ensure names & paths of repositories match
+    IFS=$'\n'
+    for i in $local_repos ; do
+        #echo local: "$i"
+        IFS='|'
+        local parts 
+        read -a parts <<< "$i"
+        local_repo_names=( "${local_repo_names[@]}" "${parts[0]}" )
+        local_repo_origins=( "${local_repo_origins[@]}" "${parts[1]}" )
+        local_repo_relpaths=( "${local_repo_relpaths[@]}" "${parts[2]}" )
+        local_repo_revisions=( "${local_repo_revisions[@]}" "${parts[3]}" )
+        local_repo_paths=( "${local_repo_paths[@]}" "${parts[4]}" )
+    done
+    IFS=$'\n'
+    for i in $remote_repos ; do
+        #echo remote: "$i"
+        IFS='|'
+        local parts 
+        read -a parts <<< "$i"
+        remote_repo_names=( "${remote_repo_names[@]}" "${parts[0]}" )
+        remote_repo_origins=( "${remote_repo_origins[@]}" "${parts[1]}" )
+        remote_repo_relpaths=( "${remote_repo_relpaths[@]}" "${parts[2]}" )
+        remote_repo_revisions=( "${remote_repo_revisions[@]}" "${parts[3]}" )
+        remote_repo_paths=( "${remote_repo_paths[@]}" "${parts[4]}" )
+    done
+    
+    # shorthand this
+    remote_repo_canon=${remote_repo_paths[0]}
+}
+
+
+verify_revision() # local_repo_relpath remote_revision
+{
+    ( cd ${local_repo_canon}/${1} ; git cat-file -t ${2} > /dev/null 2>&1 )  
+}
+
+verify_repos()
+{
+    # compare origin for root repository
+    if [ "${local_repo_origins[0]}" != "${remote_repo_origins[0]}" ] ; then
+        echo "Different origins for root repository:"
+        echo "   local: '${local_repo_origins[0]}'" 
+        echo "  remote: '${remote_repo_origins[0]}'"
+        cleanup_and_error
+    fi
+    
+    # compare relpaths for root repository
+    if [ "${local_repo_relpaths[0]}" != "${remote_repo_relpaths[0]}" ] ; then
+        echo "Remote path doesn't appear to be base of root repository:"
+        echo "    remote origin: ${remote_repo_origins[0]}"
+        echo "      remote path: ${remote_repo_paths[0]}"
+        echo "    relative path: ${remote_repo_relpaths[0]}"
+        cleanup_and_error
+    fi
+    
+    # compare revision compatibility
+    if [ "${local_repo_revisions[0]}" != "${remote_repo_revisions[0]}" ] ; then
+        verify_revision "${remote_repo_relpaths[0]}" "${remote_repo_revisions[0]}"
+        if [ $? -ne 0 ] ; then
+            echo "Remote repository is at a revision not contained in local repository:"
+            echo "    remote origin: ${remote_repo_origins[0]}"
+            echo "      remote path: ${remote_repo_paths[0]}"
+            echo "         revision: ${remote_repo_revisions[0]}"
+            cleanup_and_error
+        fi
+    fi
+      
+ 
+    if [ "${#local_repo_names[@]}" -ne "${#remote_repo_names[@]}" ] ; then
+        echo "Submodules between repositories do not match: (count mismatch)"
+    
+        make_tmp_file local_repo_names_list
+        make_tmp_file remote_repo_names_list
+        make_tmp_file only_local_repo_names
+        make_tmp_file only_remote_repo_names
+        make_tmp_file common_repo_names
+    
+        (   for ((i=1;i<${#local_repo_names[@]};i++)) ; do
+                echo "${local_repo_names[$i]}" >> "$local_repo_names_list"
+            done
+        ) &
+        
+        (   for ((i=1;i<${#remote_repo_names[@]};i++)) ; do
+                echo "${remote_repo_names[$i]}" >> "$remote_repo_names_list"
+            done
+        ) &
+        
+        wait 
+        
+        comm -12 "$local_repo_names_list" "$remote_repo_names_list" > "$common_repo_names" &
+        comm -23 "$local_repo_names_list" "$remote_repo_names_list" > "$only_local_repo_names" &
+        comm -13 "$local_repo_names_list" "$remote_repo_names_list" > "$only_remote_repo_names" &
+        
+        wait
+        
+        if [ -s "$common_repo_names" ] ; then 
+            echo "    Common submodules:"
+            cat "$common_repo_names" | sed -e 's/^/        /'
+        fi
+
+        if [ -s "$only_local_repo_names" ] ; then 
+            echo "    Local only submodules:"
+            cat "$only_local_repo_names" | sed -e 's/^/        /'
+        fi
+        
+        if [ -s "$only_remote_repo_names" ] ; then 
+            echo "    Remote only submodules:"
+            cat "$only_remote_repo_names" | sed -e 's/^/        /'
+        fi
+        
+        echo ""
+        cleanup_and_error "Please manually fix-up submodules in order to use this script. Aborting!"
+    fi
+    
+    # check that names and rel-paths match
+    local valid_origins=1
+    local valid_submodules=1
+    for ((i=1;i<${#local_repo_names[@]};i++)) ; do
+        if [ "${local_repo_names[$i]}" != "${remote_repo_names[$i]}" ] ; then
+            # try to find match in other list
+            local found_lr=0
+            local found_rl=0
+            for ((j=$i+1;j<${#local_repo_names[@]};j++)) ; do 
+                if [ "${local_repo_names[$i]}" = "${remote_repo_names[$j]}" ] ; then
+                    found_lr=1
+                fi
+                if [ "${local_repo_names[$j]}" = "${remote_repo_names[$i]}" ] ; then
+                    found_rl=1
+                fi
+            done
+            
+            if [ $found_lr -eq 0 ] ; then
+                echo "Remote repository does not contain: ${local_repo_names[$i]}"
+                valid_submodules=0
+            fi 
+            if [ $found_rl -eq 0 ] ; then
+                echo "Local repository does not contain: ${remote_repo_names[$i]}"
+                valid_submodules=0
+            fi
+        else 
+            if [ "${local_repo_origins[$i]}" != "${remote_repo_origins[$i]}" ] ; then
+                echo "Different origins for '${local_repo_names[$i]}'"
+                echo "   local: '${local_repo_origins[$i]}'" 
+                echo "  remote: '${remote_repo_origins[$i]}'"
+                valid_origins=0
+            fi
+            if [ "${local_repo_relpaths[$i]}" != "${remote_repo_relpaths[$i]}" ] ; then
+                echo "Different Submodule paths for submodule '${local_repo_names[$i]}'"
+                echo "   local: '${local_repo_relpaths[$i]}'" 
+                echo "  remote: '${remote_repo_relpaths[$i]}'"
+                valid_submodules=0
+            fi
+            if [ "${local_repo_revisions[$i]}" != "${remote_repo_revisions[$i]}" ] ; then
+                verify_revision "${remote_repo_relpaths[$i]}" "${remote_repo_revisions[$i]}"
+                if [ $? -ne 0 ] ; then
+                    echo "Remote submodule is at a revision not contained in local submodule:"
+                    echo "        name: ${remote_repo_names[$i]}"
+                    echo "        path: ${remote_repo_relpaths[$i]}"
+                    echo "      origin: ${remote_repo_origins[$i]}"
+                    echo "    revision: ${remote_repo_revisions[$i]}"
+                    cleanup_and_error
+                fi
+            fi
+            
+        fi
+    done
+    
+    if [ $valid_origins -eq 0 ] ; then 
+        cleanup_and_error "Please manually fix-up repositories in order to use this script. Submodules may require initializing. Aborting!"
+    fi
+
+    if [ $valid_submodules -eq 0 ] ; then 
+        cleanup_and_error "Please manually fix-up submodules in order to use this script. Submodules may require initializing. Aborting!"
+    fi
+}
+
+
+sync_files()
+{
+    #output tmp files
+    make_tmp_file tmp_rsync_all_uniq_files
+    make_tmp_file tmp_delete_all_files
+    make_tmp_file tmp_rsync_out
+    make_tmp_file tmp_delete_out
+    make_tmp_file tmp_grep_total_sync
+    
+    (
+      
+        #arrays to contain tmp files
+        declare -a rsync_all_files
+        declare -a delete_all_files
+
+        
+        for ((i=0;i<${#local_repo_names[@]};i++)) ; do
+            
+            #make temp files
+            tmp_rsync_files=$(mktemp -t rsb_rsync_files_list.XXXXXXXXXX)
+            tmp_delete_files=$(mktemp -t rsb_delete_files_list.XXXXXXXXXX)
+        
+            #keep record of temp files
+            rsync_all_files=( "${rsync_all_files[@]}" "$tmp_rsync_files" )
+            delete_all_files=( "${delete_all_files[@]}" "$tmp_delete_files" )
+            
+            # git diff works from repo
+            cd ${local_repo_paths[$i]} 
+
+            # get local prefix
+            local prefix="${local_repo_relpaths[$i]}"
+            
+            # run these in parallel
+            
+            # parallel subshell to get added/changed files
+            ( git diff ${remote_repo_revisions[$i]} --name-only --no-renames --ignore-submodules -z --diff-filter=ACMT \
+            |  tr '\n' '\1' | tr '\0' '\n' | sed "s/^/${local_repo_relpaths[$i]//\//\\/}/" \
+            > $tmp_rsync_files
+            ) &
+            
+            # parallel subshell to get deleted files
+            ( git diff ${remote_repo_revisions[$i]} --name-only --no-renames --ignore-submodules -z --diff-filter=D \
+            |  tr '\n' '\1' | tr '\0' '\n' | sed "s/^/${local_repo_relpaths[$i]//\//\\/}/" \
+            > $tmp_delete_files
+            ) &
+        done
+        
+        # wait for sub-lists and optimistic remote rsync to complete
+        wait
+        
+        #concat everything
+        for ((i=0;i<${#local_repo_names[@]};i++)) ; do
+            cat "${rsync_all_files[$i]}"  >> $tmp_rsync_all_files
+            cat "${delete_all_files[$i]}" >> $tmp_delete_all_files
+            
+            rm "${rsync_all_files[$i]}"
+            rm "${delete_all_files[$i]}"
+        done
+        
+        
+        
+        #make unique and remove deletes from sync list (possibly came in from remote)
+        comm -23 <( sort -u "$tmp_rsync_all_files" ) \
+                 <( sort -u "$tmp_delete_all_files" ) \
+             | tee "$tmp_grep_total_sync" | tr '\n' '\0' | tr '\1' '\n' > "$tmp_rsync_all_uniq_files"
+        
+        
+        #build list of modules actuallying being Sync'd
+        local tmp_modules
+        local joinstr=""
+        
+        local matched=0
+        local total_num=$((`wc -l < "$tmp_grep_total_sync"` + `wc -l < "$tmp_delete_all_files"`))
+        
+        for ((i=1;i<${#local_repo_names[@]};i++)) ; do
+            local num1=$(grep -c -e "^${local_repo_relpaths[$i]//\//\\/}\/" -- "$tmp_grep_total_sync") 
+            local num2=$(grep -c -e "^${local_repo_relpaths[$i]//\//\\/}\/" -- "$tmp_delete_all_files") 
+            local num;
+            (( num = num1 + num2 ))
+            if  (( num > 0 )) ; then
+                tmp_modules=$(printf '%s%s%30s  %6d  %s' "${tmp_modules}" "${joinstr}" "${local_repo_names[$i]}" "$num" "${local_repo_origins[$i]}")
+                joinstr=$'\n'
+                ((matched += num))
+            fi
+        done
+        local unmatched
+        (( unmatched =  total_num - matched))
+        if (( unmatched > 0 )) ; then
+            tmp_modules=$(printf '%30s  %6d  %s\n%s' "${local_repo_names[0]}" "$unmatched" "${local_repo_origins[0]}" "$tmp_modules")
+        fi
+        tmp_modules=$(printf '%30s  %6s  %s\n%s' "Repo" "#Diff" "Origin" "$tmp_modules" )
+        
+        # back to src repo
+        cd ${local_repo_canon} 
+        
+        #print repositories affected
+        if [[ -s "$tmp_rsync_all_uniq_files" || -s "$tmp_delete_all_files" ]] ; then
+            echo "Syncing repositories:"
+            echo $tmp_modules
+            
+            #if files to rsync, do so and remove 'directories' form output with grep, trim rsync info, etc
+            if [ -s "$tmp_rsync_all_uniq_files" ] ; then 
+                #cat "$tmp_rsync_all_uniq_files" | xargs -0 -n 1 echo
+                
+                rsync -av0z --files-from="$tmp_rsync_all_uniq_files" . "${remote_host}:${remote_repo_canon}" \
+                    | tail -n +2 \
+                    | grep -v -e '/$' \
+                    | sed 's/^/+ /' \
+                    > $tmp_rsync_out &
+            fi
+            
+            #delete files on remote
+            if [ -s "$tmp_delete_all_files" ] ; then
+                #cat "$tmp_delete_all_files" 
+                
+                # delete files on remote and remove 'deleted directories' from output with grep, also add + to output
+                cat "$tmp_delete_all_files" | tr '\n' '\0' | tr '\1' '\n' \
+                    | ssh "${remote_host}" "cd ${remote_repo_canon} && xargs -0 rm -rvf" \
+                    | sed "s/^removed \`/- /" \
+                    | tr -d "'" \
+                    | grep -v -e '/$' \
+                    > $tmp_delete_out &
+            fi
+        fi
+        
+        # wait for operations to complete
+        wait
+     
+        #output outputs
+        
+        # osx doesn't support head -n -3
+        local rsync_len=$(( `wc -l < "$tmp_rsync_out"` - 3 ))
+        local delete_len=$(( `wc -l < "$tmp_delete_out"` ))
+        
+        if (( rsync_len > 0 || delete_len > 0 )) ; then
+            echo "["
+            
+            if (( rsync_len > 0 )) ; then
+                head -n $rsync_len "$tmp_rsync_out"
+            fi
+            
+            if (( delete_len > 0 )) ; then
+                cat $tmp_delete_out
+            fi
+            
+            echo "]"
+            echo $(( rsync_len + delete_len)) "changed files"
+            echo
+        else
+            echo "No changed files"
+            echo
+        fi
+    )
+}
+
+
+# parse
+if [ -n "${RSB_REMOTE}" ]; then
+    parse_remote_url ${RSB_REMOTE}
+else
+    # show usage?
+    if [ $# -le 0 ]; then 
+        error_and_usage "Error: no arguments"
+    fi 
+    parse_remote_url $1
+    # abandon first arg
+    shift 
+
+    # nosync?
+    if [ "$1" == "--no-sync" ]; then
+        nosync='true'
+        shift
+    fi
+
+    # synconly 
+    if [ "$1" == "--sync-only" ]; then
+        synconly='true'
+        shift
+    fi
+
+    # json-bear 
+    if [ "$1" == "--json-bear" ]; then
+        jsonbear='true'
+        shift
+    fi
+
+    # alt-local
+    #  -- thought this would fix vscode's link editor requiring absolute paths, and subsequently too long, however vscode also requires paths inside workspace, so.. no-go
+    if [[ "$1" =~ --alt-local=.* ]] ; then
+        matches=(${1//=/ })
+        alt_local=${matches[1]}
+        shift
+    fi
+
+fi
+
+#echo "remote host         : ${remote_host}"
+#echo "remote repo arg     : ${remote_repo_arg}"
+
+get_repos
+#echo "remote repository   : ${remote_repo_canon}"
+#echo "local repository    : ${local_repo_canon}"
+
+verify_repos
+
+
+#find relative path and working path
+cwd=`pwd`
+relative=${cwd##$local_repo_canon}
+remote_wd=${remote_repo_canon}${relative}
+
+#echo "current path        : ${cwd}"
+#echo "relative path       : ${relative}"
+#echo "remote working path : ${remote_wd}"
+
+
+escaped_args="";
+
+for var in "$@" ; do
+    var=${var//\"/\\\"} # escape quotes
+    var=${var//\\/\\\\} # escape escape slashes
+    old=$var
+    var=${var// /}  # replace space wiht nothing
+    #var=${var//\t/} # replace tab with nothing
+    #var=${var//\n/} # replace newline with nothing
+    if [[ "$old" == "$var" ]] # quotes unecessary
+    then
+        escaped_args="${escaped_args} ${var}" 
+    else
+        escaped_args="${escaped_args} \\\"${old}\\\""
+    fi
+done  
+
+
+
+# sync files
+if [ "${nosync}" != "true" ]; then
+    sync_files
+
+    untracked=`git ls-files -o --directory --exclude-per-directory=.gitignore --no-empty-directory && git submodule --quiet foreach 'git ls-files -o --directory --exclude-per-directory=.gitignore --no-empty-directory | sed s/^/${name//\//\\\/}\\\//'`
+fi
+
+cd ${cwd}
+if [ -n "${untracked}" ]; then 
+    echo Warning: did not sync the following untracked files, to fix, add or commit to git
+    git ls-files -o --directory --exclude-per-directory=.gitignore  --no-empty-directory ${local_repo_canon}
+    echo ""
+fi
+
+if [ "${synconly}" == "true" ]; then
+    echo Finished syncing local files to remote repository
+else 
+    echo  "build on   : " ${remote_host}:${remote_repo_canon}${relative}
+    echo  "build args : " ${escaped_args}
+    #echo "build arguments     :${escaped_args}"
+    #echo
+
+    if [ -t 1 ]; then 
+        ttyparam="-t" 
+    else
+        ttyparam=""
+    fi
+
+    if [ "${jsonbear}" == "true" ]; then
+        bearcmd="bear -o compile_commands.json.new -- "
+        bearpostcmd="; if [ -e 'compile_commands.json.new' ] ; then if [ -e 'compile_commands.json' ] ; then mv compile_commands.json compile_commands.json.old ; jq -s '.[1] + .[0] | unique_by(.file)' compile_commands.json.old compile_commands.json.new > compile_commands.json ; else cp compile_commands.json.new compile_commands.json ; fi ; fi "
+    else
+        bearcmd=""
+        bearpostcmd=""
+    fi
+
+    if [ "$UNAME" = "Darwin" ] ; then
+
+        if [ "" != "${alt_local}" ] ; then
+            sed_local_repo="${alt_local}"
+        else 
+            sed_local_repo="${local_repo_canon}"
+        fi
+        
+        xcode='\/Applications\/Xcode.app\/Contents\/Developer\/Toolchains\/XcodeDefault.xctoolchain\/usr'
+        
+        # change gcc to osx clang (make local paths match)
+        extrased=( '-e' 's/\/gcc-[0-9.]+\//\/darwin-4.2.1\//g')    
+         
+        # clang doesn't like this warning (make code-completion work)
+        extrased=( "${extrased[@]}" "-e" "s/-Wno-expansion-to-defined//g" ) 
+        
+        # don't care about linker params  (make code-completion work)
+        extrased=( "${extrased[@]}" "-e" "s/-Wl,[ ]*[^ \"]*//g" )           
+        
+        # not linux (make code-completion work)
+        extrased=( "${extrased[@]}" "-e" "s/-D_LINUX//g" )
+
+        # make osx mysql paths map
+        extrased=( "${extrased[@]}" "-e" "s/-I\/usr\/include\/mariadb/-I\/usr\/local\/include\/mysql/g" )   
+        
+        # make include paths absolute (currently doesn't seem necessary)
+        #extrased=( "${extrased[@]}" "-e" "s/-I\([ ]*[^/]\)/-I${sed_local_repo//\//\\/}\/\1/g" )  
+        
+        # add system include paths manually
+        extrased=( "${extrased[@]}" "-E" "-e" "s/(\"command\":[ ]*\"[^ ]*[ ]*)/\1 -I${xcode}\/include\/c++\/v1 -I\/usr\/local\/include -I${xcode}\/lib\/clang\/9.0.0\/include -I${xcode}\/include -F\/System\/Library\/Frameworks -F\/Library\/Frameworks -I${xcode}\/include\/c++\/v1\/experimental  /" ) 
+        
+        # change compiler to local compiler
+        extrased=( "${extrased[@]}" "-e" "s/\/opt\/da\/gcc[0-9]+\/bin\/g\+\+/\/usr\/bin\/clang++/")
+        extrased=( "${extrased[@]}" "-e" "s/\/opt\/da\/gcc[0-9]+\/bin\/gcc/\/usr\/bin\/clang/")
+        
+        # make windows style error pattern look like GCC's (boost unit-test)
+        extrased=( "${extrased[@]}" "-E" "-e" "s/(^[^(:]*)\(([0-9]+)\): /\1:\2: /g")
+
+        # make error paths absolute (so VSCode can link from output pane)
+        extrased=( "${extrased[@]}" "-E" "-e" "s/(^| |\")([^/\"][^ \"]+\.(h|c|cc|cpp|cxx|hpp|hxx|inc)(:[0-9]+(:([0-9]+:?)?)?)?)([ ,\"]|$)/\1${sed_local_repo//\//\\/}\/\2\7/g" )  
+
+    fi 
+
+
+    ssh ${ttyparam} ${remote_host} "cd ${remote_wd} && ${bearcmd} bjam ${escaped_args} ${bearpostcmd}" | LC_CTYPE=C sed -l -e s/${remote_repo_canon//\//\\/}/${sed_local_repo//\//\\/}/g "${extrased[@]}"
+
+    if [ $? -ne 0 ]; then
+        bjamfail="true"
+    fi
+
+    # try to update compile_commands even on failure
+    if [ "${jsonbear}" == "true" ]; then
+        
+        # grab compile_json to local
+        { 
+            ssh ${remote_host} "cd ${remote_wd} && cat compile_commands.json"  
+        } | { 
+            LC_CTYPE=C sed -l -e s/${remote_repo_canon//\//\\/}/${local_repo_canon//\//\\/}/g "${extrased[@]}" #| tee sed_output.json
+        } | {
+            #if [ -e "compile_commands.json" ]; then
+            #    jq -s '.[1] + .[0] | unique_by(.file)' "compile_commands.json" /dev/stdin 
+            #else 
+                cat 
+            #fi
+        } > "compile_commands.json.tmp" \
+            && { #success
+                mv  "compile_commands.json.tmp"  "compile_commands.json"
+                echo "   Updated \"compile_commands.json\"   "
+               }\
+            || { #failure
+                rm  "compile_commands.json.tmp"
+                echo "Failed to fetch or merge compile_commans.json"
+            }
+    fi
+
+    if [ "${bjamfail}" == "true" ]; then
+        cleanup_and_error "Error: failed run bjam remotely"
+    fi
+
+fi
+
+#done
+rm_tmp_files
+
