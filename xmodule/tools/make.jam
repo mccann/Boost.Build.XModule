@@ -309,9 +309,7 @@ generators.register [ new xmake-build-generator xmodule-make.src-xbuild
 toolset.flags   $(__name__).build TARGETS
                                 : <xbuild-arg>
                                 ;
-toolset.flags   $(__name__).build DEFAULT_NUM_JOBS
-                                : [ build-jobs-arg.external-build-jobs-arg ]
-                                ;
+
 toolset.flags   $(__name__).build NUM_JOBS
                                 : <xbuild-jobs>
                                 ;
@@ -321,9 +319,6 @@ toolset.flags   $(__name__).build JAM_SEMAPHORE
 
 toolset.flags   $(__name__).inplace-build TARGETS
                                 : <xbuild-arg>
-                                ;
-toolset.flags   $(__name__).inplace-build DEFAULT_NUM_JOBS
-                                : [ build-jobs-arg.external-build-jobs-arg ]
                                 ;
 toolset.flags   $(__name__).inplace-build NUM_JOBS
                                 : <xbuild-jobs>
@@ -347,6 +342,9 @@ rule setup-build-env ( targets * : properties * )
 .EXPORT  = "export " ;
 rule build ( targets * : sources * : properties * )
 {
+     # set default num jobs
+    DEFAULT_NUM_JOBS on $(targets) = [ build-jobs-arg.external-build-jobs-arg ] ;
+
     setup-build-env  $(targets) : $(properties) ;
 }
 
@@ -354,11 +352,12 @@ actions build
 {
     $(XLOG[1])="$(<[1])"
     {
+        # Error & logging
+        set -e -x 
         : set env variables 
         $(.EXPORT)$(ENV_VARS)$(.NEWLINE)
     
         : xmake build action
-        echo make -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
         make -C "$(>[1]:D)" -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
 
     } $(XLOG[2])
@@ -367,6 +366,9 @@ actions build
 
 rule inplace-build ( targets * : sources * : properties * )
 {
+    # set default num jobs
+    DEFAULT_NUM_JOBS on $(targets) = [ build-jobs-arg.external-build-jobs-arg ] ;
+
     # setup toolset
     xmodule.xtoolset-config-targets $(targets[1]) : $(properties) ;
 
@@ -378,6 +380,8 @@ actions inplace-build
 {
     $(XLOG[1])="$(<[1])"
     {
+        # Error & logging
+        set -e -x 
         : set env variables 
         $(.EXPORT)$(ENV_VARS)$(.NEWLINE)
     
@@ -393,7 +397,6 @@ actions inplace-build
         $(.EXPORT)LDFLAGS="$(XTOOLSET_LINKFLAGS:J= )" 
     
         : xmake build action
-        echo make -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
         make -C "$(>[1]:D)" -j$(NUM_JOBS:E=$(DEFAULT_NUM_JOBS)) "$(TARGETS)"
 
     } $(XLOG[2])
@@ -489,8 +492,9 @@ actions install
 {
     $(XLOG[1])="$(<[1])"
     {
+        # Error & logging
+        set -e -x 
         : xmake install action
-        echo make -j$(.SPACE)$(XDIST_JOBS) "$(TARGETS:E=install)"
         make DESTDIR="$(>[3]:R=$(.CWD))" -C "$(>[1])" -j$(.SPACE)$(XDIST_JOBS)  "$(TARGETS:E=install)"
         
     } $(XLOG[2])

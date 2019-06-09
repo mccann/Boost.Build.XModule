@@ -36,7 +36,10 @@ class xconfigure-configure-generator : xmodule-generator
 {
     import property-set ;
     import path ;
-    import xmodule : refine-source-file-hash-dependencies ;
+    import xmodule : refine-source-file-hash-dependencies 
+                     construct-workspace 
+                   ;
+
 
     rule generated-targets ( XBUILDCONF : property-set : project name ? )
     {
@@ -50,13 +53,22 @@ class xconfigure-configure-generator : xmodule-generator
         #                     'copy' would need to ignore .git folder etc
         #
 
-        property-set = [ refine-source-file-hash-dependencies
-                           $(property-set) $(project) $(name)
-                         : $(XBUILDCONF) ] ;
 
         local buildconf-script = [ $(XBUILDCONF).name ] ;
         local buildconf-path   = [ path.root [ $(XBUILDCONF).path ]
                                              [ path.pwd ] ] ;
+
+        local workspace =   [ construct-workspace $(project) $(name)
+                                : 
+                                    # by default, workspace is highly variant
+                                    [ xvariant-ps 
+                                        [ refine-source-file-hash-dependencies
+                                            $(property-set) $(project) $(name) 
+                                        : $(XBUILDCONF) 
+                                        ] 
+                                    ] 
+                                : $(XBUILDCONF)
+                            ] ;
 
         local a  = [ new non-scanning-action $(XBUILDCONF)
                          : xmodule-configure.buildconf : $(property-set) ] ;
@@ -64,8 +76,11 @@ class xconfigure-configure-generator : xmodule-generator
         local t1 = [ new file-target [ path.join $(buildconf-script:D) configure ] exact
                     : XCONFIGURE : $(project) : $(a) : $(buildconf-path) ] ;
 
-        local t2 = [ new file-target $(name)/log/$(buildconf-script:D=).log
-                    exact : XBUILDCONF_LOG : $(project) : $(a) ] ;
+        local t2 =  [ new xmodule-workspace-file-target
+                            log/$(buildconf-script:D=).log
+                        : : $(workspace) : $(project) : $(a)
+                        : [ $(workspace).path ] 
+                    ] ;
 
          # log file is not intended to be depended upon, do not return it.
         return  [ property-set.empty ] [ virtual-target.register $(t1) ] ;

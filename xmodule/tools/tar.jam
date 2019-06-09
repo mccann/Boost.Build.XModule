@@ -11,7 +11,10 @@ import toolset ;
 import xmodule ;
 
 
-type.register XTAR : tar tgz zip ;
+# automatically works for tar.*   ie, tar.bz2, tar.xz  etc
+
+type.register XTAR : tar tgz ;
+type.register XZIP : zip ;
 
 feature.feature xtar-arg : : free incidental ;
 
@@ -61,7 +64,7 @@ class xtar-repo-generator : xmodule-generator
         local untar-log ;
         {
             local untar = [ new non-scanning-action $(TAR) $(xroot)
-                            : xmodule-tar.untar 
+                            : $(self.id) 
                             : $(tar-ps) ] ;
 
             untar-log = [ virtual-target.register
@@ -93,15 +96,34 @@ generators.register [ new xtar-repo-generator
                               xmodule-tar.untar 
                             : XTAR : XREPO ] ;
 
+generators.register [ new xtar-repo-generator 
+                              xmodule-tar.unzip 
+                            : XZIP : XREPO ] ;
 
 
 toolset.flags   $(__name__).untar OPTIONS : <xtar-arg> ;
+toolset.flags   $(__name__).unzip OPTIONS : <xtar-arg> ;
 
 
 .CWD  = [ PWD ] ;
 XLOG = [ xmodule.logfile-action : ": cleanup " cleanup_dirs ] ;
 
-actions untar
+rule    untar ( targets + : sources + : properties * )
+{
+    UNTAR on $(targets) = "tar -x -f" ;
+
+    extract $(targets) : $(sources) ;
+}
+
+rule    unzip ( targets + : sources + : properties * )
+{
+    UNTAR on $(targets) = "unzip" ;
+
+    extract $(targets) : $(sources) ;
+}
+
+
+actions extract
 {
     $(XLOG[1])="$(<[1])" 
 
@@ -123,8 +145,8 @@ actions untar
             : change to it
             cd "$(>[2]).new-tmp-dir"
         
-            : untar to it
-            tar -x -f "$(>[1]:R=$(.CWD))" $(OPTIONS)
+            : untar/unzip to it
+            $(UNTAR) "$(>[1]:R=$(.CWD))" $(OPTIONS)
         ) && {
 
             : "move current to old  (if exists)"
@@ -141,3 +163,5 @@ actions untar
     } $(XLOG[2])
 
  }
+
+ 

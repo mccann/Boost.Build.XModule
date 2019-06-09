@@ -29,13 +29,18 @@ local rule xtoolset-cache ( action : property-set )
             xmodule.basic-generator-error "missing <toolset-$(toolset):version> ! This can happen when using defaulted toolset, try explicit toolset=XXXXX" : $(targets) ;
         }
 
+        local platform = [ $(toolset-ps).get <toolset-$(toolset):platform> ] ;
+
+
+        local complete-toolset = $(toolset) $(platform) ;
+        complete-toolset = $(complete-toolset:J=-) ;
 
         XTOOLSET         on $(cache) = $(toolset) ; 
         XTOOLSET_VERSION on $(cache) = $(version) ;
 
         # set toolset variables on fake target 'cache'
         toolset.set-target-variables 
-                $(toolset).$(action) 
+                $(complete-toolset).$(action) 
                 $(cache) 
             :   $(toolset-ps) ;
 
@@ -67,8 +72,10 @@ rule xtoolset-action-var ( action : var : property-set )
 #
 
 .xtoolset-config.items = 
+    binpath
     cc       
     cxx
+    as
     ar
     nm
     ld
@@ -80,10 +87,12 @@ rule xtoolset-action-var ( action : var : property-set )
     version
 ;
 
+.xtoolset-config.action-var.binpath      = compile.c    CONFIG_COMMAND bin-path ;
 .xtoolset-config.action-var.cc           = compile.c    CONFIG_COMMAND cc-tool ;
 .xtoolset-config.action-var.cflags       = compile.c    OPTIONS        ;
 .xtoolset-config.action-var.cxx          = compile.c++  CONFIG_COMMAND ;
 .xtoolset-config.action-var.cxxflags     = compile.c++  OPTIONS        ;
+.xtoolset-config.action-var.as           = compile.asm  CONFIG_COMMAND ;
 .xtoolset-config.action-var.ar           = archive      .AR            ;
 .xtoolset-config.action-var.ranlib       = archive      .RANLIB        ;
 .xtoolset-config.action-var.nm           = archive      .AR            nm-tool ;
@@ -102,7 +111,7 @@ rule xtoolset-config ( config : property-set )
                             $(action-var[1]) 
                         : $(action-var[2]) 
                         : $(property-set) ] ;
-
+        
         if $(action-var[3]) {
             return [ $(action-var[3]) $(result) : $(property-set) ] ; 
         }
@@ -115,6 +124,19 @@ rule xtoolset-config ( config : property-set )
         errors.error "unknown / unmapped config:" $(feature:E=) ;
     }
 }   
+
+## BINPATH just needs to be the basepath 
+rule bin-path ( results * : property-set ) 
+{
+    # use last non flag 
+    local result ;
+    for local i in $(results) {
+        if ! [ MATCH "^-(.*)$" : $(i) ] {
+            result = $(i) ;
+        }
+    }
+    return $(result:D) ;
+}
 
 ## CC needs to NOT be a C++ compiler for cmake/other tools
 rule cc-tool ( results * : property-set ) 
@@ -135,12 +157,25 @@ rule ld-tool ( results * : property-set )
     local key = .ld-tool.$(results:J=.) ;
     if ! $($(key)) 
     {
-        # need flags!
-        results += [ xtoolset-config linkflags : $(property-set) ] ; 
+        
+        # if linkflags are inherited, get them from toolset
+        if linkflags in [ xtoolset-filter-items $(property-set) ] {
+            results += [ xtoolset-config linkflags : $(property-set) ] ; 
+        }
+
+        # add <xtoolset-linkflags> from property-set
+        results += [ $(property-set).get <xtoolset-linkflags> ] ;
 
         # add print-prog-name
-        results += -print-prog-name=ld ;
-
+        local tool = [ MATCH "-fuse-ld=(.*)" : $(results) ] ;
+        # use last one
+        while $(tool[2]) {
+            tool = $(tool[2-]) ;
+        }
+        tool = ld.$(tool) ; 
+        tool ?= ld ;
+        results += -print-prog-name=$(tool) ;
+        
         $(key) = [ SHELL $(results:J=" ") : strip-eol ] ;
     }
     return $($(key)) ;
@@ -237,12 +272,12 @@ rule xtoolset-config-items-on-targets   ( targets *
 #       set XTOOLSET_ variables on targets from properties
 #        - <xtoolset-inherit|forfeit> features control which variables are set
 #
-rule xtoolset-config-targets ( targets * : properties * )
+rule xtoolset-config-targets ( targets * : properties * : default-forfeit * )
 {
     local ps = [ property-set.create $(properties) ] ;
 
     xtoolset-config-items-on-targets  $(targets) 
-                                    : [ xtoolset-filter-items $(ps) ]  
+                                    : [ xtoolset-filter-items $(ps) : : $(default-forfeit) ]  
                                     : $(ps) ;
 
 
@@ -259,9 +294,11 @@ rule xtoolset-config-targets ( targets * : properties * )
     # semi-workaround CMAKE's assumption that CC/CXX are just "a b" pattern, no flags
     # see xtoolset-fixup-cmd-flags for more info
     #
-    xtoolset-fixup-cmd-flags $(targets) : CC   CFLAGS   ;
-    xtoolset-fixup-cmd-flags $(targets) : CXX  CXXFLAGS ;
 
+   # if ! $(no-fixup-cmd-flags) {
+   #     xtoolset-fixup-cmd-flags $(targets) : CC   CFLAGS   ;
+   #     xtoolset-fixup-cmd-flags $(targets) : CXX  CXXFLAGS ;
+   # }
 }
 
 

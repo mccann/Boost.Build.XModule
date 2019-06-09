@@ -151,6 +151,7 @@ rule external-build-jobs-arg ( distributed-build ? )
 {
     local signature = "local" ;
     if $(distributed-build) || $(.assume-distributed-build) {
+        distributed-build = true ;
         signature = distributed ;
     }
 

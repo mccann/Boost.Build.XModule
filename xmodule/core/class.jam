@@ -27,3 +27,15 @@ rule caller-instance-of-class ( class-type )
     }
     return $(result) ;
 }
+
+# go up stack and find all instance (direct or derived) of class-type
+rule caller-instances-of-class ( class-type )
+{
+    local result ;
+    for local m in [ object-stack ] {
+        if [ class.is-a $(m) : $(class-type) ] {
+            result += $(m) ;
+        }
+    }
+    return $(result) ;
+}
