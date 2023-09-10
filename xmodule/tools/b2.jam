@@ -62,7 +62,7 @@ import property-set ;
 
 # register 'Jamroot' XJAMROOT type
 type.register XJAMROOT       ;
-type.register XUSER_JAMFILE  :  
+type.register XUSER_JAMFILE  ;
 type.register XJAMFILE       : jam ;
 
 
@@ -199,7 +199,7 @@ class xb2-build-generator : xmodule-generator
     }
 }
 
-toolset.flags   $(__name__)           B2_SELF       : [ modules.peek : self ]  ;
+toolset.flags   $(__name__)           B2_SELF       : [ SHELL "which b2" : strip-eol ]  ;
 toolset.flags   $(__name__).bootstrap OPTIONS       : <xb2-bootstrap-arg>      ;
 toolset.flags   $(__name__).bootstrap DIST_OPTIONS  : <xb2-bootstrap-dist-arg> ;
 toolset.flags   $(__name__).bootstrap BLD_OPTIONS   : 

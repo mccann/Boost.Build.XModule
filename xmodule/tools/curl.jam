@@ -16,6 +16,7 @@ feature.feature xcurl-retry       : : free incidental ;
 feature.feature xcurl-file-type   : : free ; # type of output file
 feature.feature xcurl-output-name : : free incidental ; # name of output file
 
+type.register XURL ;
 type.register XCURL_URL           : : XURL  ;
 
 ##################################################################

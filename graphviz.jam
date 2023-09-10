@@ -8,6 +8,7 @@ import generators ;
 import "class" : new ;
 import sequence ;
 import feature ;
+import common ;
 
 type.register GRAPHVIZ_DOT          : dot ;
 type.register GRAPHVIZ_TARGET       : : GRAPHVIZ_DOT ;
@@ -22,6 +23,7 @@ class graphviz-generator : generator
     import graphviz ;
     import regex ;
     import type ;
+    import string : join ;
 
     rule output ( str * )
     {
@@ -350,11 +352,14 @@ class graphviz-generator : generator
         reset ;
 
         if $(self.id) = graphviz.target && $(sources) {
-            name ?= [ $(sources[1]).name ] ;
+            name ?= [ join [ $(sources[1]).name ] .target ] ;
             output-sources-graph $(sources) ;
         }
 
         if $(self.id) = graphviz.generator {
+
+            name ?= [ join [ $(sources[1]).name ] .generator ] ;
+            name ?= "generator" ;
 
             local types = [ $(property-set).get <graphviz-type> ] ;
             local generators = [ $(property-set).get <graphviz-generator> ] ;
@@ -375,7 +380,6 @@ class graphviz-generator : generator
 
         local output = [ get-output ] ;
         if $(output) {
-
             return  [ property-set.empty ] 
                     [ virtual-target.register
                         [ new file-target 
@@ -393,24 +397,30 @@ class graphviz-generator : generator
     }
 }
 
-import path ;
-rule generate ( target : source * : properties * )
+actions generate 
 {
-    # write file now
-    local output-file = [ path.root $(target:G=) [ on $(target) return $(LOCATE) ] ] ;
-    local outfile = @($(output-file):E=$(source:G=)) ;
+    cat << "HEREDOC_EOF" > '$(<)'
+$(>:G=)
+HEREDOC_EOF
 }
-
-if [ modules.peek : OS ] = MACOSX 
-{
-    actions generate 
-    {
-        open -a Graphviz $(<[1])    
-    }
-}
-
 
 generators.register [ new graphviz-generator graphviz.target    : : GRAPHVIZ_TARGET    ] ;
 generators.register [ new graphviz-generator graphviz.generator : : GRAPHVIZ_GENERATOR ] ;
 
+
+type.register GRAPHVIZ_SVG          : svg ;
+
+type.register GRAPHVIZ_TARGET_SVG     : : GRAPHVIZ_SVG ;
+type.register GRAPHVIZ_GENERATOR_SVG  : : GRAPHVIZ_SVG ;
+
+
+generators.register-standard graphviz.dot2svg : GRAPHVIZ_DOT       : GRAPHVIZ_SVG ;
+generators.register-standard graphviz.dot2svg : GRAPHVIZ_TARGET    : GRAPHVIZ_TARGET_SVG ;
+generators.register-standard graphviz.dot2svg : GRAPHVIZ_GENERATOR : GRAPHVIZ_GENERATOR_SVG ;
+
+
+actions dot2svg
+{
+    dot -Tsvg -o '$(<)'  '$(>)'
+}
 

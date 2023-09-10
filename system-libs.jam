@@ -727,7 +727,7 @@ local rule homebrew-cellar-path ( )
 local rule homebrew-cellar ( formula : version ? : with *  )
 {
     local rule ver ( obj ) {
-        return [ MATCH "\"version\":\"([^\"]*)\"" : $(obj) ] ;
+        return [ MATCH "\"([^\"]*)\"" : $(obj) ] ;
     }
 
     # cache
@@ -762,7 +762,7 @@ local rule homebrew-cellar ( formula : version ? : with *  )
     local version-obj ;
     # hopefully brew doesn't change order of items in it's json!
     # -- this could stop working -- not a proper json parser
-    local version-objs = [ MATCH "({\"version\":[^}]*})" : $(json) ] ;
+    local version-objs = [ trim.sh "printf '%s' '$(json)' | jq '.[0].installed[0].version'" ] ;
 
     # multiple versions?
     if $(version-objs[2]) {
