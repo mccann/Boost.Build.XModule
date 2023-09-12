@@ -7,220 +7,511 @@ import type ;
 import generators ;
 import "class" : new ;
 import sequence ;
+import utility ;
 import feature ;
 import common ;
+import scanner ;
+import property-set ;
+import toolset ;
 
-type.register GRAPHVIZ_DOT          : dot ;
-type.register GRAPHVIZ_TARGET       : : GRAPHVIZ_DOT ;
-type.register GRAPHVIZ_GENERATOR    : : GRAPHVIZ_DOT ;
 
-feature.feature graphviz-type       : : free ;
-feature.feature graphviz-generator  : : free ;
+# palette
+# honeydew  nonphotoblue   cerulean  Berkelyblue    orange    darkorange   red 
+# #F1FAEE   #A8DADC        #457B9D   #1D3557        #FFB703   #FB8500      #E63946
 
-class graphviz-generator : generator
+# designed to be used once per graph - baseclass
+class graphviz-graph
 {
-    import property-set ;
-    import graphviz ;
+    import sequence ;
     import regex ;
-    import type ;
     import string : join ;
+    import utility ;
+    import assert ;
 
-    rule output ( str * )
+    rule __init__ ( target : sources * : property-set )
     {
-        self.output-strs += $(str:J=" ") ;
+        self.target = $(target) ;
+        self.actual-target = [ $(target).actual-name ] ;
+        self.sources = $(sources) ;
+        self.property-set = $(property-set) ;
     }
-    rule get-output ( )
+    
+    rule make_id_chars ( str )
     {
-        return $(self.output-strs:J=\n)\n ;
-    }
-    rule reset ( )
-    {
-        self.output-strs = ;
-        self.nodes = ;
-        self.edges = ;
-        self.root-nodes = ;
-        self.root-edges = ;
-    }
-
-    rule node-safe ( str )
-    {
+        # shouldn't have grist!
+        assert.equal : $(str:G) ;
         return [ regex.replace $(str:E="") "[^a-zA-Z_0-9 ]+" "_" ] ;
     }
 
-    rule label-safe ( str )
+    rule make_label_chars ( str )
     {
         return [ regex.replace $(str:E="") "[^a-zA-Z_. 0-9]+" "." ] ;
     }
 
-    rule node-name ( target )
+    rule node-id ( target virtual ? )
     {
-        return  [ node-safe $(target) ] ;
+        # keep grist, but make it more friendly
+        if $(target:G) {
+            target = [ utility.ungrist $(target:G) ] $(target:G=) ;
+        } else if virtual = $(virtual) {
+            target = $(target) [ $(target).name ] [ $(target).type ] ;
+        } 
+        return [ make_id_chars $(target:J=_) ] ;
     }
 
-    rule cluster-start ( target )
+    rule node-attrs ( target virtual ? )
     {
-        local name = [ node-safe [ $(target).name ] ] ;
-        output "  subgraph cluster_$(name) {" ;
+        local label ;
+        local fontcolor ;
+        local height ;
+        local fontname = "Sans-Serif" ;
+
+        local color = grey ;
+        local style = \"filled,rounded\" ;
+        local shape = box ;
+        local width = 2 ;
+
+
+        if virtual = $(virtual) {
+            label = [ $(target).name ] ;
+
+            # origin!
+            if $(target) in $(self.sources) {
+                color       = \"#E63946\" ;
+                fontcolor   = white  ;
+                shape       = doublecircle ;
+            } else {
+                if [ $(target).root ] {
+                    # foreign root
+                    color   = \"#FB8500\" ;
+                    shape   = circle ;
+                }
+            }
+        } else {
+            label   = $(target:G=) ;
+
+            style   = \"filled,rounded\" ;
+            height  = 0 ;
+            
+
+            if <local-include> = $(target:G) {
+                color   = \"#F1FAEE\" ;
+            }
+            if <system-include> = $(target:G) {
+                label   = <$(label)>  ;
+                color   = \"#A8DADC\" ;
+            }
+        }
+        
+        local attrs =   label=\"$(label)\" 
+                        fontcolor=$(fontcolor)
+                        height=$(height) 
+                     
+                        fontname=\"$(fontname)\"
+                        color=$(color) 
+                        style=$(style)
+                        shape=$(shape)
+                        width=$(width)
+                    ;
+
+        return $(attrs:J=" ") ;
     }
 
-    rule cluster-end ( )
+    
+    rule show-node ( target virtual ? )
     {
-        output "  }" ;
+        if virtual = $(virtual) {
+            return [ can show [ modules.peek $(target) : self.type ] ] ;
+        }
+        return true ;
     }
 
-    rule show-node ( target )
+    rule output-list ( var : strs * ) {
+        $(var) on $(self.actual-target) += $(strs) ;
+    }
+
+    rule output ( var : strs * : join ? ) {
+        $(var) on $(self.actual-target) += $(strs:J=$(join:E=" ")) ;
+    }
+
+    rule node-data ( target virtual ? )
     {
-        local type = [ modules.peek $(target) : self.type ] ;
-        if ! $(type) || ! $(type) in C CPP OBJ {
+        return [ join [ node-id $(target) $(virtual) ] [ node-attrs $(target) $(virtual) ] : "|" ] ;
+    }
+
+    rule add-unique-target-var ( outvar data ) 
+    {
+        if ! $(data) in [ on $(self.actual-target) return $($(outvar)) ] {
+            $(outvar) on $(self.actual-target) +=  $(data) ;
+        }
+    }
+
+    rule output-source-data ( source ) 
+    {
+        GRAPHVIZ_SOURCES on $(self.actual-target) += [ node-id $(source) virtual ] ;
+    }
+
+    rule output-root-node-edge-data ( root target virtual ? )
+    {
+        if [ show-node $(root) virtual ] {
+            if [ show-node $(target) $(virtual) ] {
+               add-unique-target-var    GRAPHVIZ_ROOTEDGES 
+                                [ join [ node-id $(root) virtual ] [ node-id $(target) $(virtual) ] : "|"  ]
+                                ;
+            }
+        }
+    }
+
+    rule output-edge-data ( node1 node2 : virtual1 ? : virtual2 ?  )
+    {
+        if [ show-node $(node1) $(virtual1) ] && [ show-node $(node2) $(virtual2) ] {
+            # TODO: consider not de-duping and weighting graph by edge count
+            add-unique-target-var   GRAPHVIZ_EDGES 
+                            [ join [ node-id $(node1) $(virtual1) ] 
+                                   [ node-id $(node2) $(virtual2) ] 
+                            : "|" 
+                            ] ;
+        }
+    }
+}
+
+class graphviz-dependencies-graph : graphviz-graph
+{
+    import type ;
+    import utility ;
+    import property-set ;
+    import regex ;
+    import sequence ;
+    import path ;
+
+    rule __init__ ( target : sources * : property-set )
+    {
+        graphviz-graph.__init__  $(target) : $(sources) : $(property-set) ;
+
+        self.flags = [ $(property-set).get <flags> ] ;
+
+        init-ability-exclusion no-scan  : $(self.flags) ;
+        init-ability-exclusion no-show  : $(self.flags) ;
+
+        output-source-nodes $(self.sources) ;
+    }
+
+    rule init-ability-exclusion ( exclusion : flags * ) { 
+
+        self.$(exclusion) = ;
+        if $(exclusion) in $(flags) {
+            self.$(exclusion) = "*" ;
+        }
+        else {
+            self.$(exclusion) = [ sequence.unique 
+                                    [ MATCH "$(exclusion)=(.*)" : $(flags) ] 
+                                ] ;
+            if "*" in $(self.$(exclusion)) {
+                self.$(exclusion) = "*" ;
+            }
+        }
+    }
+    rule can ( ability type ? ) {
+
+        if  ( $(self.no-$(ability)) != "*" )  
+        &&  (   ! $(type)
+            ||  (  $(type) != *  && ! $(type) in $(self.no-$(ability)) )
+            )   
+        {
             return true ;
         }
     }
 
-    rule node ( target )
+    rule collect-dependencies ( property-set origin target root ? )
     {
-        if [ show-node $(target) ] {
-            output "   " [ node-name $(target) ]
-                         [ sequence.join "[ label=\"" [ $(target).name ] "\" ]" ] ;
-        }
-    }
-
-    rule edge ( node1 node2 )
-    {
-        if [ show-node $(node1) ] && [ show-node $(node2) ] {
-            output " " [ node-name $(node1) ] "\n       ->" [ node-name $(node2) ]  ;
-        }
-    }
-
-    rule collect ( target root ? )
-    {
-        if [ $(target).root ] {
-            self.root-nodes += $(target) ;
+        # treat all origin as root
+        if origin = $(origin) {
             root = $(target) ;
         }
-
-        local targets ;
-
-        local action = [ $(target).action ] ;
-        if $(action) {
-            targets = [ $(action).targets ] ;
-            for local s in [ $(action).sources ] {
-                self.edges += $(targets)|$(s) ;
-                collect $(s) $(root) ;
-            }
+        # replace root ?
+        else if [ $(target).root ] {
+            root = $(target) ;
         }
+        # use target as root if don't have one
         else {
-            targets = $(target) ;
+            root ?= $(target) ;
         }
 
-        if $(root) {
-            for local t in  $(targets) {
-                self.root-edges += $(root) $(t) ;
+        # if origin, ignore show and scan ability
+
+        # Turn off inclusion of scanned dependencies with <flags>no-scan=TYPE
+        local type = [ $(target).type ] ;
+        if $(type) {
+
+            if origin = $(origin) || [ can show $(type) ] {
+
+                if ! $(root) in $(self.root-nodes) {
+                    self.root-nodes += $(root) ;
+                }
+                self.nodes      += $(target) ;
+                self.root-edges += $(root) $(target) ;
+                
+                if origin = $(origin) || [ can scan $(type) ] {
+
+                    # scan virtual?
+                    local action = [ $(target).action ] ;
+                    if $(action) {
+                        local sources = [ $(action).sources ] ;
+                        self.source-edges += $(target)|$(sources) ;
+
+                        # compute new property set to be used for children only
+                        local action_ps = [ $(action).adjust-properties [ $(action).properties ] ] ;
+                        for local s in $(sources) {
+                            collect-dependencies $(action_ps) not-origin $(s) $(root) ;
+                        }
+                    }
+
+                    # scan headers?
+                    local scanner = [ type.get-scanner $(type) : $(property-set) ] ;
+                    if $(scanner) {
+                        local actual-name = [ $(target).actual-name ] ;
+
+                        # Add the scanner instance to the grist for name.
+                        local g = [ sequence.join [ utility.ungrist $(actual-name:G) ] $(scanner) : - ] ;
+
+                        actual-name = $(actual-name:G=$(g)) ;
+
+                        # ROOT needs to be per graphviz graph
+                        $(__name__).ROOT on $(actual-name)   = $(root)   ;
+                        GRAPHVIZ_META    on $(actual-name)   = $(target) ; 
+                        GRAPHVIZ         on $(actual-name)  += $(__name__) ;
+                    }
+                }
             }
         }
-        else {
-            self.nodes += $(targets) ;
-        }
-
     }
 
-    rule output-root ( root : edges * )
+
+    rule output-root-edges ( targets-virtual : root-target-nodes * )
     {
-        cluster-start  $(root) ;
+        while $(root-target-nodes) {
+            output-root-node-edge-data $(root-target-nodes[1]) $(root-target-nodes[2]) $(targets-virtual) ;
+            root-target-nodes = $(root-target-nodes[3-]) ;
+        }
+    }
 
-        local filtered ;
+    rule output-source-nodes ( sources * ) 
+    {
+        sequence.transform output-source-data : $(sources) ;
+    }
 
-        local nodes ;
-
-        while $(edges) {
-            if $(edges[1]) = $(root) {
-                nodes += $(edges[2]) ;
+    rule output-attributed-nodes ( virtual outvar ? : nodes * )
+    {
+        local rule data ( outvar virtual target )
+        {
+            if [ show-node $(target) $(virtual) ] {
+                add-unique-target-var $(outvar) [ node-data $(target) $(virtual) ] ;
             }
-            else {
-                filtered += $(edges[1]) $(edges[2]) ;
+        }
+
+        sequence.transform data $(outvar:E=GRAPHVIZ_NODES) $(virtual) : $(nodes) ;
+    }
+
+    rule output-node-ids ( virtual : nodes * : outvar )
+    {
+        local rule ids ( outvar virtual target )
+        {
+            if [ show-node $(target) $(virtual) ] {
+                add-unique-target-var $(outvar) [ node-id $(target) $(virtual) ] ;
             }
-            edges = $(edges[3-]) ;
         }
 
-        sequence.transform node : [ sequence.unique $(nodes) ] ;
-
-        cluster-end ;
-
-        return $(filtered) ;
+        sequence.transform ids $(outvar) $(virtual) : $(nodes) ;
     }
 
-    rule output-root-clusters ( root-edges * )
-    {
-        while $(root-edges) {
-            root-edges = [ output-root  $(root-edges[1]) :
-                                        $(root-edges) ] ;
-        }
-    }
-
-    rule output-unrooted-nodes ( )
-    {
-        sequence.transform node : $(self.nodes) ;
-    }
-
-    rule output-edges ( edges * )
+    rule output-edges ( first-virtual ? : second-virtual ? : edges * )
     {
         for local pair in [ sequence.unique $(edges) ] {
-            edge [ MATCH ^(.*)\\|(.*)$ : $(pair) ] ;
+            output-edge-data [ MATCH ^(.*)\\|(.*)$ : $(pair) ] : $(first-virtual) : $(second-virtual) ;
         }
     }
 
-
-    ## 
-
-    rule output-type-group ( name : types * : cluster-attr * : first-type-attr * : make-edges ? )
+    rule output-graph ( target : sources * : properties * ) 
     {
-        name = [ node-safe $(name) ] ;
+        sequence.transform collect-dependencies $(self.property-set) origin : $(self.sources)  ;
+
+        output-attributed-nodes   virtual             : $(self.nodes) ;
+        
+        if [ can show root-clusters ] {
+            output-root-edges                   virtual   : $(self.root-edges) ;
+        }
+
+        output-edges              virtual : virtual   : $(self.source-edges) ;
+         
+
+        # call action by this name to complete
+        return graphviz.graph-dependencies ;
+    }
+
+
+    rule process-headers ( target capturevar : matches * : binding )
+    {
+        
+        local root = [ on $(target) return $($(__name__).ROOT) ] ;
+
+        # scan next level of includes, no meta-target on these
+
+        # must add same grist as as cpp.jam does 
+        local system_deps   = [ sequence.transform path.native 
+                                : [ regex.transform $(matches) : "<(.*)>"   ]
+                              ] ;
+        local local_deps    = [ sequence.transform path.native
+                              : [ regex.transform $(matches) : "\"(.*)\"" ]
+                              ] ; 
+
+        local system_grist  = [ on $(target) return $(HDRGRIST) ] ;
+        local bindpath      = [ NORMALIZE_PATH $(binding:D) ] ;
+
+        local local_grist   = $(system_grist)"#"$(bindpath) ;
+
+        system_deps         = $(system_deps:G=$(system_grist)) ;
+        local_deps          = $(local_deps:G=$(local_grist)) ;
+        
+
+        local included_matches ;
+
+        # only scan if can show
+        {
+            local scan_deps ;
+
+            # future feature, scan imported modules
+
+            if [ can show local-include ] {
+                included_matches += $(local_deps:G=local-include) ;
+
+                if [ can scan local-include ] {
+                    $(__name__).SCANNED on $(local_deps) = local-include ;
+                    scan_deps += $(local_deps) ;
+                }
+            }
+
+            if [ can show system-include ] {
+                included_matches += $(system_deps:G=system-include) ;
+
+                if [ can scan system-include ] {
+                    $(__name__).SCANNED on $(system_deps) = system-include ;
+                    scan_deps += $(system_deps) ;
+
+                    # Most likely you aren't able to follow system includes by default
+                    # they need to be attached to SEARCH var, which is normaly done via <include>
+                    #    The following snippet shows how to achieve this for now (TODO: consider making this some kind of feature? -- not usually useful)
+                    # import trim ;
+                    # import regex ;
+                    # local newline = "
+                    # " ;
+                    # system-includes = [ trim.trim [ SPLIT_BY_CHARACTERS  [ SHELL "echo | clang++ -E -xc++ -Wp,-v - 2>&1 | sed '/^ /!d;s/^ //;s/ (framework directory)//'" : strip-eol ] : $(newline) ] ] ;
+                    # lib mylib : source.cpp : <include>$(system-include) ;
+                }
+            }
+
+            # cause configured deps to be scanned 
+            if $(scan_deps) {
+
+                
+                $(__name__).ROOT on $(scan_deps)  = $(root)     ;
+                GRAPHVIZ        on $(scan_deps)  += $(__name__) ;
+            }
+        }
+
+        # add these matches?
+        if $(included_matches) {
+            
+            # These are proper nodes!
+            output-attributed-nodes scanned : $(included_matches) ;
+
+            # process these
+            if [ can show root-clusters ] {
+                if $(root) {
+                    for local t in $(included_matches) {
+                        output-root-node-edge-data $(root) $(t) ;
+                    }
+                }
+                else {
+                    echo "Weird: Graphviz dependency without Root: $(target)" ;
+                }
+            }
+
+            
+            # was source a meta-target?
+            local meta-target = [ on $(target) return $(GRAPHVIZ_META) ] ;
+            if $(meta-target) {     
+                output-edges virtual : : $(meta-target)|$(included_matches) ;
+            }
+            else {
+                local scanned = [ on $(target) return $($(__name__).SCANNED) ] ;
+                output-edges         : : $(target:G=$(scanned:E=unknown))|$(included_matches) ;
+            }
+        }
+    }
+}
+
+
+class graphviz-generator-graph : graphviz-graph
+{
+    import property-set ;
+    import sequence ;
+    import type ;
+
+
+    rule output-type-group ( name : types * : cluster-attr * : first-type-attr * : make-base-edges ? )
+    {
+        name = [ make_id_chars $(name) ] ;
         if $(types[2]) {
-            output "  subgraph cluster_$(name) {" ;
-            output "    rank=same clusterrank=none " $(cluster-attr) ;
+            output GRAPHVIZ_DOTLANG : "  subgraph $(name) {" ;
+            output GRAPHVIZ_DOTLANG : "    $(cluster-attr)"  ;
+            # output GRAPHVIZ_DOTLANG : "    clusterrank=local " ;
         }
         else {
-            output "  subgraph $(name) { " ;
+            output GRAPHVIZ_DOTLANG : "  subgraph $(name) { " ;
         }
 
         # nodes
         for local t in $(types) {
-            output "   " [ node-safe $(t) ] "[ $(first-type-attr) ]" ;
+            output GRAPHVIZ_DOTLANG : "   " [ node-id $(t) ] "[ $(first-type-attr) ]" ;
             first-type-attr = ;
         }
 
-        if $(make-edges) {
-            while $(types[2]) {
-                output "   " [ node-safe $(types[1]) ] -> [ node-safe $(types[2]) ] ;
+        if $(make-base-edges) {
+            local base = $(types[1]) ;
+            types = $(types[2-]) ;
+            while $(types) {
+                output GRAPHVIZ_DOTLANG : "   " [ node-id $(base) ] "->" [ node-id $(types[1]) ]   ;
                 types = $(types[2-]) ;
             }
         }
 
-        output "  }" ;
+        output GRAPHVIZ_DOTLANG : "  }" ;
     }
 
-    rule output-base-type-group ( name : base base-attr * : cluster-attr * )
-    {
-        local bases = [ type.all-bases $(base) ] ;
-        if $(bases[1]) != $(base) {
-            exit BASE not as expected $(base) .. $(bases) ;
-        }
-
-        output-type-group $(name) : $(bases) : $(cluster-attr) : $(base-attr) : make-bases ;
-    }
 
     rule output-viable-source-tree ( generator-ids * : target-types * )
     {
+        local nodes_emitted = ;
         local edges = ;
         local all-sources = ;
+        local current-target = ;
 
         local t0 ;
         local t  ;
+
+        local rule output-node ( node ) {
+            if ! $(node) in $(nodes_emitted) {
+                output GRAPHVIZ_DOTLANG : "       " [ node-id $(node) ] ;
+                nodes_emitted += $(node) ;
+            }
+        }
+
 
         local rule process-generator ( g )
         {
             local sources = [ $(g).source-types ] ;
             
-            sources ?= "ANY" ;
+            # sources ?= "ANY" ;
 
             for local s in $(sources) {
                 local derived = $(s) ;
@@ -235,6 +526,7 @@ class graphviz-generator : generator
                             t += $(n) ;
                         }
                     }
+                    # edge is SOURCE, DERIVED, CURRENT-TARGET, generator-id
                     edges += $(s) $(n) $(current-target) [ $(g).id ] ;
                 }
             }
@@ -259,8 +551,8 @@ class graphviz-generator : generator
   
         while $(t)
         {
-            local current-target = $(t[1]) ;
-            local generators = [ modules.peek generators : .generators.$(t[1]) ] ;
+            current-target = $(t[1]) ;
+            local generators = [ modules.peek generators : .generators.$(current-target) ] ;
             t = $(t[2-]) ;
 
             while $(generators)
@@ -290,13 +582,28 @@ class graphviz-generator : generator
             }
         }
 
-        for local base-type in $(target-types) {
-            output-base-type-group 
-                  $(base-type) 
-                : $(base-type) 
-                : "color=lightblue style=filled edge [ color=blue dir=both ] "  ;
-        }
+        # root target types
+        output GRAPHVIZ_DOTLANG : "  subgraph root_target_types { " ;  
+        output GRAPHVIZ_DOTLANG : "     rank=same" ;  
+        sequence.transform output-node $(target-types) ;
+        output GRAPHVIZ_DOTLANG : "  }" ;  
 
+        output GRAPHVIZ_DOTLANG : "  subgraph base_target_types { " ;  
+        for local base-type in $(target-types) {
+            local bases = [ type.all-bases $(base-type) ] ;
+            sequence.transform output-node $(bases[2-]) ;
+        }
+        output GRAPHVIZ_DOTLANG : "  }" ;
+
+        for local base-type in $(target-types) {
+            output-type-group $(base-type) 
+                            : [ type.all-bases $(base-type) ] 
+                            : "color=lightblue style=filled edge [ color=cyan ]"
+                            : # no attributes
+                            : make-bases 
+                            ;
+        }
+        
         local source-roots = [ sequence.unique [ sequence.transform root-base : $(all-sources) ] ] ;
 
         local rule base-cluster ( root )
@@ -310,50 +617,126 @@ class graphviz-generator : generator
         local edges-out ;
         while $(edges) {
 
+            # edge is SOURCE, DERIVED, CURRENT-TARGET, generator-id
+            
             # remove 'module' name from actions
-            # make edge4 not matter
-    #         edges = $(edges[1-3]) "" $(edges[5-]) ;
+
+            # this folds many generators together, such as gcc.mingw.link, gcc.link, unix.link, darwin.link 
+
+            # OR fold action entirely - TODO make this configurable
+
             local action = [ MATCH ^.*\\.(.*)$ : $(edges[4]:E=.unknown) ] ;
             if $(action) {
-                action = [ label-safe $(action) ] ;
+                action = [ make_label_chars $(action) ] ;
             }
-            local key = "$(edges[1])/$(edges[2])/$(edges[3])/$(edges[4]:E=)" ;
+            action = ;
+            local src ;
+            local dst ;
+            local style ;
+
+            # is a source for target
+            if $(edges[1]) = $(edges[2]) {
+                src = $(edges[1]) ;
+                dst = $(edges[3]) ;
+                style = "[ color=red  ]" ;
+            } 
+            # derived is an instance of source
+            else {
+                src = $(edges[2]) ;
+                dst = $(edges[1]) ;
+                style = "[ color=blue ]" ;
+            } 
+            
+            local key = "$(src) -> $(dst) via $(action:E=)" ;
             if ! $(key) in $(edges-out) {
-                if $(edges[1]) = $(edges[2]) {
-                    output "    " [ node-safe $(edges[1]) ] -> 
-                                  [ node-safe $(edges[3]) ] "[ color=red  ]"  "[ label=\"$(action)\" ]" ;
-                }
-                else {
-                    output "    " [ node-safe $(edges[2]) ] -> 
-                                  [ node-safe $(edges[3]) ] "[ color=blue ]"  "[ label=\"$(action)\" ]" ;
-                }
+                output GRAPHVIZ_DOTLANG : "    " [ node-id $(src) ] 
+                                              -> [ node-id $(dst) ] 
+                                                 $(style)
+                                                "[ label=\"$(action)\" ]" ;
                 edges-out += $(key) ;
             }
             edges = $(edges[5-]) ;
         }
-
     }
 
-    rule output-sources-graph ( sources * )
+    rule output-graph ( target : sources * : properties * ) 
     {
-        # collect
-        sequence.transform collect : $(sources) ;
+        local property-set = [ property-set.create  $(properties) ] ;
 
-        output "digraph $(name) {" ;
-        output-root-clusters  $(self.root-edges) ;
-        output-unrooted-nodes $(self.nodes) ;
-        output-edges          $(self.edges) ;
-        output "}" ;
+        local types = [ $(property-set).get <graphviz-type> ] ;
+        local generators = [ $(property-set).get <graphviz-generator> ] ;
+
+        output-viable-source-tree $(generators) : $(types) ;
+
+
+        output  GRAPHVIZ_DOTLANG : "
+  subgraph clusterLegend { 
+    layout=dot 
+    rankdir=TB
+    rank = sink;
+    label = \"Legend (wip)\";
+    fontsize = 20
+    node [ color=\"white\" ]
+    {rank=same; key; key2}
+    
+    key [ label=<<table border=\"0\" cellpadding=\"2\" cellspacing=\"0\" cellborder=\"0\">
+                    <tr><td align=\"right\" port=\"i1\">A</td></tr>
+                    <tr><td align=\"right\" port=\"i2\">A</td></tr>
+                    <tr><td align=\"right\" port=\"i3\">A</td></tr>
+                    <tr><td align=\"right\" port=\"i4\">A</td></tr>
+                 </table>> ]
+
+    key2 [ label=<<table border=\"0\" cellpadding=\"2\" cellspacing=\"0\" cellborder=\"0\">
+                    <tr><td align=\"left\" port=\"i1\">B</td><td>     A is an instance of type B</td></tr>
+                    <tr><td align=\"left\" port=\"i2\">B</td><td>     A is a source for type B</td></tr>
+                    <tr><td align=\"left\" port=\"i3\">B</td><td>     A green B</td></tr>
+                    <tr><td align=\"left\" port=\"i4\">B</td><td>     A is an instance of type B</td></tr>
+                 </table>>]
+
+    key:i1 -> key2:i1 [ color=blue  ]
+    key:i2 -> key2:i2 [ color=red   ]
+    key:i3 -> key2:i3 [ color=green ]
+    key:i4 -> key2:i4 [ color=cyan  ]
+  }
+" ;
+        # call action by this name to complete
+        return graphviz.graph-generators ;
     }
+}
+
+type.register GRAPHVIZ_DOT          : dot ;
+type.register GRAPHVIZ_SOURCES      : : GRAPHVIZ_DOT ;
+type.register GRAPHVIZ_GENERATOR    : : GRAPHVIZ_DOT ;
+
+#TODO: investigate using feature.subfeature 
+feature.feature graphviz-graph      : : free ;
+# feature.feature graphviz-config     :  : incidental ;
+feature.feature graphviz-type       : : free ;
+feature.feature graphviz-generator  : : free ;
+
+class graphviz-generator : generator
+{
+    import property-set ;
+    import graphviz ;
+    import string : join ;
 
     rule run ( project name ? : property-set : sources * )
     {
-        # reset incase run multiple times
-        reset ;
+        local target = ;
 
-        if $(self.id) = graphviz.target && $(sources) {
+        if $(self.id) = graphviz.sources && $(sources) {
             name ?= [ join [ $(sources[1]).name ] .target ] ;
-            output-sources-graph $(sources) ;
+            
+            target  =   [ new file-target $(name)
+                        : $(self.target-types[1]) 
+                        : $(project)
+                        : [ new action $(sources) 
+                          : graphviz.generate-graph 
+                          : $(property-set) 
+                          ] 
+                        ] ;
+
+            GRAPHVIZGRAPH on [ $(target).actual-name ] = [ new graphviz-dependencies-graph $(target) : $(sources) : $(property-set) ] ;
         }
 
         if $(self.id) = graphviz.generator {
@@ -361,62 +744,212 @@ class graphviz-generator : generator
             name ?= [ join [ $(sources[1]).name ] .generator ] ;
             name ?= "generator" ;
 
-            local types = [ $(property-set).get <graphviz-type> ] ;
-            local generators = [ $(property-set).get <graphviz-generator> ] ;
+            target  =   [ new file-target $(name)
+                        : $(self.target-types[1]) 
+                        : $(project)
+                        : [ new action
+                          : graphviz.generate-graph
+                          : $(property-set) 
+                          ] 
+                        ] ;
 
-            local graph-name ;
-            graph-name = [ sequence.transform node-safe $(generators) $(types) ] ;
-            graph-name = $(graph-name:J=__) ;
-            graph-name ?= $(name) ;
-            graph-name ?= "what" ;
-
-            output "digraph $(name) {"  ;
-
-            output-viable-source-tree $(generators) : $(types) ;
-
-            output "}" ;
+            GRAPHVIZGRAPH on [ $(target).actual-name ] = [ new graphviz-generator-graph $(target) : $(sources) : $(property-set) ] ;
         }
 
-
-        local output = [ get-output ] ;
-        if $(output) {
+        if $(target) {
             return  [ property-set.empty ] 
-                    [ virtual-target.register
-                        [ new file-target 
-                              $(name)
-                            : $(self.target-types[1]) 
-                            : $(project)
-                            : [ new non-scanning-action 
-                                    [ new notfile-target 
-                                            $(output)
-                                        : $(project) ]
-                                : graphviz.generate
-                                : $(property-set) ] 
-                    ]   ] ;
+                    [ virtual-target.register $(target) ] ;
         }
     }
 }
 
-actions generate 
+
+
+rule hdrrule ( target : matches * : binding )
 {
-    cat << "HEREDOC_EOF" > '$(<)'
-$(>:G=)
-HEREDOC_EOF
+    # call original 
+    original-scanner-hdrrule $(target) : $(matches) : $(binding) ;
+ 
+    local graphviz = [ on $(target) return $(GRAPHVIZ) ] ;
+    for local gv in $(graphviz) {
+        $(gv).process-headers $(target) GRAPHVIZ_DOT_HDRS  : $(matches) : $(binding) ;
+    }
 }
 
-generators.register [ new graphviz-generator graphviz.target    : : GRAPHVIZ_TARGET    ] ;
+# move targets.main-target-sources into this module as local rule
+IMPORT scanner : hdrrule : $(__name__) : original-scanner-hdrrule ;
+
+# replace original scanner.hdrrule with our version
+IMPORT $(__name__) : hdrrule : scanner : hdrrule ;
+EXPORT scanner : hdrrule ; # make it non-local
+
+# redo making scanner.hdrrule globally accessible
+IMPORT scanner : hdrrule : : scanner.hdrrule ;
+
+
+rule generate-graph ( target : sources * : properties * )
+{
+    # TODO: remove this always, just here for development
+    ALWAYS $(target) ;
+
+    local graphviz-graph = [ on $(target) return $(GRAPHVIZGRAPH) ] ;
+    local next-action = [ $(graphviz-graph).output-graph $(target) : $(sources) : $(properties) ] ;
+
+    $(next-action) $(target) : $(sources) : $(properties) ;
+}
+
+.NEWLINE = "\n" ;
+.PREFIX  = "\t" ;
+.SHARED_SHELL_FUNCS = 
+"
+    output_prefixed() {
+        sed  \"s/^/${1?}/\"
+    }
+    output_postfixed() {
+        sed  \"s/$/${1:-}/\"
+    }
+    output_nodes() {
+        sed -E \"s/^(.*)\\|(.*)$/${1:-}\\\\1 \\n${1:-}${prefix}   [ \\\\2 ]/\"
+    }
+    output_edges() {
+        sed -E \"s/^(.*)\\|(.*)$/${1:-}\\\\1 \\n${1:-}${prefix}-- \\\\2/\"
+    }
+
+    # prefix name comment attrs
+    output_subgraph() {
+        {
+            echo  
+            echo \"# ${3?}\"
+            echo \"subgraph ${2?}\"
+            echo \"{\"
+            cat - | output_prefixed \"${prefix}\" | output_postfixed ${4:+\"  [ ${4} ]\"}
+            echo \"}\"
+            echo  
+        } | output_prefixed \"${1?}\"
+    }
+
+    escape_for_regex_match() {
+	    sed 's/[]\\/$*.^[]/\\\\&/g'
+    }
+    
+    select_nodes_with_root() {
+        sed -e \"/^${1}.*/\"'!d' -e 's/^.*|\\(.*\\)/\\1/'
+    }
+    select_pairs_without_root() {
+        sed \"/^${1}.*/d\"
+    }
+" ;
+
+actions graphviz.graph-dependencies 
+{
+    prefix="$(.PREFIX)"
+
+    # root edges are delimited by:
+    #     \n for each pair
+    #     |  for each root|node
+    
+    $(.SHARED_SHELL_FUNCS)
+
+    output_root_clusters ()
+    {
+        root_edges="${2}"
+        while [ -n "${root_edges}" ] ; do
+            root="${root_edges%%|*}"
+            reroot=`echo "$root" | escape_for_regex_match`
+
+            echo "${root_edges}" | select_nodes_with_root "${reroot}" \
+                | output_subgraph "${prefix}" "cluster_nodes_of_root__${root%%|*}" \
+                                               "all nodes with root ${root%%|*}"
+
+            root_edges=`echo "${root_edges}" | select_pairs_without_root "${reroot}"`
+        done 
+    }
+
+   {
+        echo "graph $(<:B) {"
+
+        # options 
+        {
+            echo
+            echo   "# default values"
+            echo   "layout=dot" 
+            echo   "rankdir=LR" 
+            echo   "edge [color=lightgrey]" 
+            # echo   "overlap=prism" 
+            echo  
+            echo   "# default root to sources values"
+            printf "%s\n" "root=$(GRAPHVIZ_SOURCES)"
+            echo
+            echo   "# additional/overrides set with <graphviz-graph>"
+            printf "%s\n" '$(GRAPHVIZ_GRAPH)'
+            echo  
+        } | output_prefixed "${prefix}"
+
+        # nodes        
+        echo '$(GRAPHVIZ_NODES:J=$(.NEWLINE))' | output_nodes \
+            | output_subgraph "${prefix}" nodes "declare nodes with details"
+
+        
+        # root clusters
+        output_root_clusters    "${prefix}" "$(GRAPHVIZ_ROOTEDGES:J=$(.NEWLINE))"
+
+        # edges
+        echo '$(GRAPHVIZ_EDGES:J=$(.NEWLINE))' | output_edges \
+            | output_subgraph "${prefix}" edges "relationships between nodes"
+
+        printf "}\n"
+    } > '$(<)'
+}
+
+
+toolset.flags graphviz GRAPHVIZ_GRAPH : <graphviz-graph> ;
+
+
+actions graphviz.graph-generators
+{
+    prefix="$(.PREFIX)"
+
+    $(.SHARED_SHELL_FUNCS)
+
+    {
+        printf "digraph %s { \n" '$(>:B)'
+
+        #TODO: make graph layout tweaks configurable
+        printf "   newrank = true\n" 
+        printf "   layout = dot ; beautify=true; smoothing=true;\n" 
+        printf "   rankdir = TB\n" 
+        printf "   font=helvetica\n" 
+        printf "   overlap = prism\n" 
+        printf "   edge [ color=lightgrey  ] \n" 
+        # printf "   concentrate=true  \n"
+
+        echo '$(GRAPHVIZ_NODES:J=$(.NEWLINE))'  | output_nodes "${prefix}" 
+        echo '$(GRAPHVIZ_EDGES:J=$(.NEWLINE))'  | output_edges "${prefix}"
+
+        echo '$(GRAPHVIZ_DOTLANG:J=$(.NEWLINE))'
+
+        printf "}\n"
+    } > '$(<)'
+
+}
+
+
+
+generators.register [ new graphviz-generator graphviz.sources   : : GRAPHVIZ_SOURCES   ] ;
+
+#TODO: address this needing a source to function, despite not using it
 generators.register [ new graphviz-generator graphviz.generator : : GRAPHVIZ_GENERATOR ] ;
 
 
 type.register GRAPHVIZ_SVG          : svg ;
 
-type.register GRAPHVIZ_TARGET_SVG     : : GRAPHVIZ_SVG ;
+type.register GRAPHVIZ_SOURCES_SVG    : : GRAPHVIZ_SVG ;
 type.register GRAPHVIZ_GENERATOR_SVG  : : GRAPHVIZ_SVG ;
 
 
-generators.register-standard graphviz.dot2svg : GRAPHVIZ_DOT       : GRAPHVIZ_SVG ;
-generators.register-standard graphviz.dot2svg : GRAPHVIZ_TARGET    : GRAPHVIZ_TARGET_SVG ;
-generators.register-standard graphviz.dot2svg : GRAPHVIZ_GENERATOR : GRAPHVIZ_GENERATOR_SVG ;
+generators.register-standard graphviz.dot2svg : GRAPHVIZ_DOT        : GRAPHVIZ_SVG ;
+generators.register-standard graphviz.dot2svg : GRAPHVIZ_SOURCES    : GRAPHVIZ_SOURCES_SVG   ;
+generators.register-standard graphviz.dot2svg : GRAPHVIZ_GENERATOR  : GRAPHVIZ_GENERATOR_SVG ;
 
 
 actions dot2svg
