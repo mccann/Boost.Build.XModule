@@ -3,18 +3,32 @@
 # (See accompanying file LICENSE_1_0.txt or http://www.boost.org/LICENSE_1_0.txt)
 
 
-# detect type of TTY
-# This method seems to work in a number of environments.
-# Previous testing methods proved to be less robust.
-if [ SHELL "tty > /dev/null 2>&1 ; printf $?" ] = "0" {
-    if [ MATCH "([0-9]+)" : [ SHELL "tput colors 2> /dev/null" ] ] > 0 {
-        .type  = "color tty" ;
-        .color_tty = true ;
+import os ;
+
+# Try getting forced TTY type from environment
+.type = [ os.environ XMODULE_FORCE_TTY_TYPE ] ;
+if $(.type) && ! $(.type) in "color tty" "tty" "not a tty" {
+    echo "Warning: Ignoring XMODULE_FORCE_TTY_TYPE. Environmental variable value is not valid." ;
+    echo "         Expected: 'color tty', 'tty', or 'not a tty'" ;
+    echo "              Got: '$(.type)'" ;
+    .type = ;  
+}
+
+# Otherwise, try detecting
+if ! $(.type) {
+    
+    # This method seems to work in a number of environments.
+    # Previous testing methods proved to be less robust.
+    if [ SHELL "tty > /dev/null 2>&1 ; printf $?" ] = "0" {
+        if [ MATCH "([0-9]+)" : [ SHELL "tput colors 2> /dev/null" ] ] > 0 {
+            .type  = "color tty" ;
+            .color_tty = true ;
+        } else {
+            .type = "tty" ;
+        }
     } else {
-        .type = "tty" ;
+        .type = "not a tty" ;
     }
-} else {
-    .type = "not a tty" ;
 }
 
  # https://en.wikipedia.org/wiki/ANSI_escape_code
