@@ -789,9 +789,6 @@ IMPORT scanner : hdrrule : : scanner.hdrrule ;
 
 rule generate-graph ( target : sources * : properties * )
 {
-    # TODO: remove this always, just here for development
-    ALWAYS $(target) ;
-
     local graphviz-graph = [ on $(target) return $(GRAPHVIZGRAPH) ] ;
     local next-action = [ $(graphviz-graph).output-graph $(target) : $(sources) : $(properties) ] ;
 

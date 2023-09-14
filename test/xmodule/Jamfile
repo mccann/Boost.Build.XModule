@@ -38,7 +38,7 @@ include $(location)/tar-tests.jam ;
 
 # visualize target's sources
 for local target in run44 {
-    graphviz-target $(target)_dot : $(target) ;
+    graphviz-sources $(target)_dot : $(target) ;
     explicit $(target)_dot ;
 }
 

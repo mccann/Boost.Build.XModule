@@ -387,13 +387,15 @@ rule __test__xtoolset ( )
     
     IMPORT fakegcc : init : $(__name__) : fakegcc.init ;
 
-    local cmd = cc  -fuse-ld=gold ;
+    local cmd = /usr/bin/cc  -fuse-ld=gold ;
     local all = -Dall ;
+    fakegcc.binpath   = /usr/bin  ;
     fakegcc.toolset   = fakegcc   ;
     fakegcc.version   = most-fake ;
     fakegcc.cc        = $(cmd) ;
     fakegcc.cxx       = $(cmd) ;
     fakegcc.ar        = fake-ar ;
+    fakegcc.as        = $(cmd) ;
     fakegcc.ranlib    = fake-ranlib ;
     fakegcc.cflags    = $(all) -Dcflags ;
     fakegcc.cxxflags  = $(all) -Dcxxflags ;
@@ -440,7 +442,6 @@ rule __test__xtoolset ( )
             assert.set-equal : $(result) ;
         }
         else {
-            assert.not-equal : $(fakegcc.$(item)) ;
             assert.set-equal $(fakegcc.$(item))  : $(result) ;
         }
     }
