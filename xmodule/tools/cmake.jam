@@ -66,6 +66,9 @@ rule cmake-configure ( targets * : sources * : properties * )
     if <link>shared in $(properties) {
         OPTIONS on $(targets) += -DBUILD_SHARED_LIBS=ON ;
     }
+    if <lto>on in $(properties) { 
+        OPTIONS on $(targets) += "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION:BOOL=TRUE" ;
+    }
     if <fpic>on in $(properties) {
         OPTIONS on $(targets) += "-DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=TRUE" ;
     }
