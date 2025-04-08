@@ -14,19 +14,9 @@ type.register DYNAMIC_PLUGIN : : SHARED_LIB ;
 
 feature.feature fpic               : off on : optional composite   ;
 feature.feature allow-static-fpic  : off on : optional incidental  ;
+feature.feature dynamic-plugin     : off on : incidental composite ;
+feature.feature dynamic-plugin-dep : off on : optional propagated incidental  ;
+
 feature.compose <fpic>on            : <relevant>fpic <cflags>-fPIC ;
+feature.compose <dynamic-plugin>on  : <link>shared <dynamic-plugin-dep>on ;
 
-
-# moved to top of gcc.jam (hack)
-# feature.feature dynamic-plugin     : off on : incidental composite ; 
-# feature.feature dynamic-plugin-dep : off on : optional propagated incidental  ;
-# feature.compose <dynamic-plugin>on  : <link>shared <dynamic-plugin-dep>on ;
-
-
-
-## change SHARED_OPTION flag in gcc.jam of B2 Sources to:
-    # toolset.flags gcc.link SHARED_OPTION <target-os>darwin <dynamic-plugin>off : -dynamiclib ;
-    # toolset.flags gcc.link SHARED_OPTION <target-os>darwin <dynamic-plugin>on : -bundle ;
-
-
-    
