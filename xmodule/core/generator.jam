@@ -80,6 +80,9 @@ class xmodule-generator : generator
         local variant   = [ filter <xvariant>   : $(xvariant)   ] ;
         local invariant = [ filter <xinvariant> : $(xinvariant) ] ;
 
+        # expand variant properties
+        variant = [ feature.expand $(variant) ] ;
+
         local relevant-props ;
         if $(relevant-feature) {
             # all variants are <relevant> 
@@ -90,11 +93,10 @@ class xmodule-generator : generator
             }
         }
 
-        #echo "raw:" $(raw) ;
-        #echo "variant:" $(variant) ;
-        #echo "invariant:" $(invariant) ;
-        #echo "relevant-props:" <relevant>$(relevant-props) ;
-        
+        # echo "raw:" $(raw) "\n" ;
+        # echo "variant:" $(variant) "\n" ;
+        # echo "invariant:" $(invariant) "\n" ;
+        # echo "relevant-props:" <relevant>$(relevant-props) "\n" ;
 
         if $(invariant) {
             return [ property-set.create 
